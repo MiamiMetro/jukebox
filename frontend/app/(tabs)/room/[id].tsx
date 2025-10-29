@@ -1,6 +1,7 @@
-import { View, Text, StyleSheet, Platform } from "react-native";
+import { View, Text, StyleSheet, Platform, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import WebNav from "../../../components/WebNav";
+import TrackPlayer from "../../../components/TrackPlayer";
 import { Theme } from "../../../constants/theme";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,14 +19,23 @@ export default function RoomDetail() {
       />
       <SafeAreaView style={styles.container} edges={Platform.OS === 'web' ? [] : ['top']}>
         {Platform.OS === 'web' && <WebNav />}
-        <View style={styles.canvas}>
-          <View style={styles.canvasContent}>
-            <Ionicons name="musical-notes" size={64} color={Theme.accent.primary} />
-            <Text style={styles.canvasText}>Your Room Canvas</Text>
-            <Text style={styles.canvasSubtext}>Build your music room here</Text>
-            <Text style={styles.canvasSubtext}>Room {id}</Text>
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+          <View style={styles.canvas}>
+            <View style={styles.canvasContent}>
+              <Ionicons name="musical-notes" size={64} color={Theme.accent.primary} />
+              <Text style={styles.canvasText}>Room {id}</Text>
+              <Text style={styles.canvasSubtext}>Music player</Text>
+              
+              {Platform.OS !== 'web' && <TrackPlayer />}
+              
+              {Platform.OS === 'web' && (
+                <Text style={styles.webMessage}>
+                  Track player is only available on mobile
+                </Text>
+              )}
+            </View>
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </>
   );
@@ -36,21 +46,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.background.primary,
   },
-  canvas: {
+  scrollView: {
     flex: 1,
+  },
+  scrollContent: {
+    padding: 20,
+    paddingTop: Platform.OS === 'web' ? 20 : 0,
+  },
+  canvas: {
     backgroundColor: Theme.background.nav,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    marginTop: Platform.OS === 'web' ? 20 : 0,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: Theme.background.border,
+    padding: 20,
   },
   canvasContent: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
+    padding: 20,
   },
   canvasText: {
     color: Theme.text.primary,
@@ -62,6 +74,13 @@ const styles = StyleSheet.create({
   canvasSubtext: {
     color: Theme.text.secondary,
     fontSize: 16,
+    marginBottom: 20,
+  },
+  webMessage: {
+    color: Theme.text.muted,
+    fontSize: 14,
+    marginTop: 20,
+    fontStyle: 'italic',
   },
 });
 

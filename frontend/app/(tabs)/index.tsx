@@ -1,5 +1,6 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Image } from "expo-image";
 import WebNav from "../../components/WebNav";
 import { Theme } from "../../constants/theme";
 import { useRouter } from "expo-router";
@@ -9,7 +10,16 @@ export default function Rooms() {
   const router = useRouter();
 
   const rooms = [
-    { id: '1', name: 'Chill Vibes', description: 'Relaxing beats for your day', users: 3 },
+    {
+      id: '1',
+      name: 'Chill Vibes',
+      users: 3,
+      currentSong: {
+        title: 'Blinding Lights',
+        artist: 'The Weeknd',
+        thumbnail: 'https://picsum.photos/1000',
+      },
+    },
   ];
 
   return (
@@ -32,12 +42,27 @@ export default function Rooms() {
               style={styles.roomCard}
               onPress={() => router.push(`/(tabs)/room/${room.id}` as any)}
             >
-              <View style={styles.roomIcon}>
-                <Ionicons name="musical-notes" size={32} color={Theme.accent.primary} />
-              </View>
+              {room.currentSong?.thumbnail ? (
+                <Image
+                  source={{ uri: room.currentSong.thumbnail }}
+                  style={styles.roomThumbnail}
+                  contentFit="cover"
+                />
+              ) : (
+                <View style={styles.roomIcon}>
+                  <Ionicons name="musical-notes" size={32} color={Theme.accent.primary} />
+                </View>
+              )}
               <View style={styles.roomInfo}>
                 <Text style={styles.roomName}>{room.name}</Text>
-                <Text style={styles.roomDescription}>{room.description}</Text>
+                {room.currentSong && (
+                  <View style={styles.nowPlaying}>
+                    <Ionicons name="radio" size={12} color={Theme.accent.primary} />
+                    <Text style={styles.currentSong} numberOfLines={1}>
+                      {room.currentSong.title} • {room.currentSong.artist}
+                    </Text>
+                  </View>
+                )}
                 <View style={styles.roomMeta}>
                   <Ionicons name="people" size={16} color={Theme.text.muted} />
                   <Text style={styles.roomUsers}>{room.users} active</Text>
@@ -107,6 +132,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 16,
   },
+  roomThumbnail: {
+    width: 60,
+    height: 60,
+    borderRadius: 12,
+    marginRight: 16,
+  },
   roomInfo: {
     flex: 1,
   },
@@ -116,10 +147,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 4,
   },
-  roomDescription: {
-    color: Theme.text.secondary,
-    fontSize: 14,
+  nowPlaying: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     marginBottom: 8,
+    marginTop: 4,
+  },
+  currentSong: {
+    color: Theme.accent.primary,
+    fontSize: 12,
+    fontWeight: '500',
+    flex: 1,
   },
   roomMeta: {
     flexDirection: 'row',
