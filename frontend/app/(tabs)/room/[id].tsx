@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, Platform, TouchableOpacity, LayoutChangeEvent } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useState, useEffect, useRef } from "react";
-import { Audio } from "expo-av";
+import TrackPlayer, { usePlaybackState, useProgress, State } from "react-native-track-player";
 import { Image } from "expo-image";
 import WebNav from "../../../components/WebNav";
 import { Theme } from "../../../constants/theme";
@@ -10,148 +10,80 @@ import { Ionicons } from "@expo/vector-icons";
 
 // Temporary song data (in real app, fetch from API)
 const currentSong = {
+  id: '1',
   title: 'Blinding Lights',
   artist: 'The Weeknd',
   thumbnail: 'https://picsum.photos/1000',
-  audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3', // Demo audio URL
+  audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
 };
 
 export default function RoomDetail() {
   const { id } = useLocalSearchParams();
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [position, setPosition] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const playbackState = usePlaybackState();
+  const progress = useProgress();
   const [isLoading, setIsLoading] = useState(true);
   const [progressBarWidth, setProgressBarWidth] = useState(0);
   const progressBarRef = useRef<View | null>(null);
-  const playbackStatusUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Handle playback state - can be State enum or object with state property
+  const playbackStateValue = typeof playbackState === 'object' && playbackState !== null && 'state' in playbackState 
+    ? playbackState.state 
+    : playbackState;
+  const isPlaying = playbackStateValue === State.Playing;
+  const position = progress.position * 1000; // Convert to milliseconds
+  const duration = progress.duration * 1000; // Convert to milliseconds
 
   useEffect(() => {
-    // Set audio mode for background playback
-    Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: true, // Allow playback in background
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    }).then(() => {
-      // Load audio directly - no permissions needed for playback
-      loadAudio();
-    }).catch((error) => {
-      console.error('Error setting audio mode:', error);
-      // Still try to load audio even if mode setting fails
-      loadAudio();
-    });
+    // Load track on mount
+    if (Platform.OS !== 'web') {
+      loadTrack();
+    } else {
+      setIsLoading(false);
+    }
 
     return () => {
-      if (sound) {
-        sound.unloadAsync().catch((error) => {
-          console.error('Error unloading sound:', error);
-        });
-      }
-      if (playbackStatusUpdateInterval.current) {
-        clearInterval(playbackStatusUpdateInterval.current);
+      // Cleanup on unmount
+      if (Platform.OS !== 'web') {
+        TrackPlayer.stop().catch(console.error);
+        TrackPlayer.reset().catch(console.error);
       }
     };
   }, []);
 
-  // Cleanup sound when component unmounts
-  useEffect(() => {
-    return () => {
-      if (sound) {
-        sound.unloadAsync().catch(() => {});
-      }
-    };
-  }, [sound]);
-
-  async function loadAudio() {
+  async function loadTrack() {
     try {
       setIsLoading(true);
-      // Unload existing sound if any
-      if (sound) {
-        await sound.unloadAsync();
-      }
-
-      console.log('Loading audio from:', currentSong.audioUrl);
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { 
-          uri: currentSong.audioUrl,
-        },
-        { 
-          shouldPlay: false,
-          isLooping: false,
-          progressUpdateIntervalMillis: 1000,
-        }
-      );
       
-      // expo-av automatically exposes to native controls when:
-      // 1. staysActiveInBackground is true (set in Audio.setAudioModeAsync)
-      // 2. Audio is playing
-      // Metadata will be read from the audio file's ID3 tags
-      // For custom metadata, you'd need to embed it in the audio file
-      setSound(newSound);
-      setIsLoading(false);
-
-      // Get initial status
-      const status = await newSound.getStatusAsync();
-      console.log('Audio loaded, status:', status.isLoaded);
-      if (status.isLoaded) {
-        setDuration(status.durationMillis || 0);
-        setIsPlaying(status.isPlaying || false);
-        setPosition(status.positionMillis || 0);
-      }
-
-      // Set up status updates
-      newSound.setOnPlaybackStatusUpdate((status: any) => {
-        if (status.isLoaded) {
-          setIsPlaying(status.isPlaying || false);
-          setPosition(status.positionMillis || 0);
-          if (status.durationMillis) {
-            setDuration(status.durationMillis);
-          }
-          if (status.didJustFinish) {
-            setIsPlaying(false);
-            setPosition(0);
-          }
-        }
+      // Reset and add track
+      await TrackPlayer.reset();
+      await TrackPlayer.add({
+        id: currentSong.id,
+        url: currentSong.audioUrl,
+        title: currentSong.title,
+        artist: currentSong.artist,
+        artwork: currentSong.thumbnail,
       });
+      
+      setIsLoading(false);
+      console.log('Track loaded successfully');
     } catch (error) {
-      console.error('Error loading audio:', error);
+      console.error('Error loading track:', error);
       setIsLoading(false);
       alert('Failed to load audio. Please check the audio URL.');
     }
   }
 
   async function togglePlayPause() {
-    if (!sound) {
-      console.warn('Sound not loaded yet');
+    if (Platform.OS === 'web') {
+      alert('Audio playback is only available on native platforms');
       return;
     }
 
     try {
-      // Ensure audio mode is set before playback
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-
-      const status = await sound.getStatusAsync();
-      console.log('Current status:', status);
-      
-      if (!status.isLoaded) {
-        console.warn('Sound is not loaded');
-        return;
-      }
-
-      // Use the actual status from the sound object, not the state
-      if (status.isPlaying) {
-        console.log('Pausing audio...');
-        await sound.pauseAsync();
+      if (isPlaying) {
+        await TrackPlayer.pause();
       } else {
-        console.log('Playing audio...');
-        await sound.playAsync();
+        await TrackPlayer.play();
       }
     } catch (error) {
       console.error('Error toggling playback:', error);
@@ -160,24 +92,29 @@ export default function RoomDetail() {
   }
 
   async function seekTo(positionMillis: number) {
-    if (!sound || !isFinite(positionMillis)) return;
+    if (Platform.OS === 'web') return;
+    if (!isFinite(positionMillis)) return;
 
-    // Ensure the position is valid and within bounds
-    const validPosition = Math.max(0, Math.min(duration || 0, Math.round(positionMillis)));
+    // Convert to seconds (TrackPlayer uses seconds)
+    const positionSeconds = positionMillis / 1000;
     
-    if (validPosition < 0 || !isFinite(validPosition)) {
+    // Ensure the position is valid and within bounds
+    const validPosition = Math.max(0, Math.min(duration / 1000 || 0, positionSeconds));
+    
+    if (!isFinite(validPosition) || validPosition < 0) {
       console.warn('Invalid seek position:', positionMillis);
       return;
     }
 
     try {
-      await sound.setPositionAsync(validPosition);
+      await TrackPlayer.seekTo(validPosition);
     } catch (error) {
       console.error('Error seeking:', error);
     }
   }
 
   const formatTime = (millis: number) => {
+    if (!isFinite(millis) || millis < 0) return '0:00';
     const totalSeconds = Math.floor(millis / 1000);
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
@@ -214,86 +151,72 @@ export default function RoomDetail() {
         <View style={styles.playerContainer}>
           {/* Progress Bar */}
           <View style={styles.progressContainer}>
-            <TouchableOpacity
-              ref={progressBarRef}
-              style={styles.progressBarWrapper}
-              activeOpacity={1}
-              onLayout={(e: LayoutChangeEvent) => {
-                const width = e.nativeEvent.layout.width;
-                setProgressBarWidth(width);
-                console.log('Progress bar layout:', width);
-              }}
-              onPress={(e) => {
-                // Get X position - different for web vs native
-                let locationX: number | undefined;
-                if (Platform.OS === 'web') {
-                  // On web, use clientX relative to the element
-                  const nativeEvent = e.nativeEvent as any;
-                  const target = e.currentTarget as any;
-                  if (target && target.getBoundingClientRect) {
-                    const rect = target.getBoundingClientRect();
-                    locationX = nativeEvent.clientX - rect.left;
+            <View style={styles.progressBarWrapper}>
+              <TouchableOpacity
+                ref={progressBarRef}
+                style={styles.progressBarTouchable}
+                activeOpacity={1}
+                disabled={Platform.OS === 'web'}
+                onLayout={(e: LayoutChangeEvent) => {
+                  const width = e.nativeEvent.layout.width;
+                  setProgressBarWidth(width);
+                }}
+                onPress={(e) => {
+                  // Get X position - different for web vs native
+                  let locationX: number | undefined;
+                  if (Platform.OS === 'web') {
+                    return; // Disabled on web
                   } else {
-                    locationX = nativeEvent.locationX;
+                    locationX = e.nativeEvent.locationX;
                   }
-                } else {
-                  locationX = e.nativeEvent.locationX;
-                }
-                
-                console.log('Tap event:', { locationX, progressBarWidth, duration, sound: !!sound, platform: Platform.OS });
-                
-                // Validate all inputs
-                if (!sound) {
-                  console.warn('Sound not available');
-                  return;
-                }
-                
-                if (!duration || !isFinite(duration) || duration <= 0) {
-                  console.warn('Invalid duration:', duration);
-                  return;
-                }
-                
-                if (!progressBarWidth || !isFinite(progressBarWidth) || progressBarWidth <= 0) {
-                  console.warn('Invalid progressBarWidth:', progressBarWidth);
-                  return;
-                }
-                
-                if (locationX === undefined || locationX === null || !isFinite(locationX)) {
-                  console.warn('Invalid locationX:', locationX);
-                  return;
-                }
-                
-                // Calculate seek position
-                const clampedX = Math.max(0, Math.min(progressBarWidth, locationX));
-                const seekPercent = (clampedX / progressBarWidth) * 100;
-                
-                if (!isFinite(seekPercent) || seekPercent < 0 || seekPercent > 100) {
-                  console.warn('Invalid seekPercent:', seekPercent, 'from clampedX:', clampedX, 'width:', progressBarWidth);
-                  return;
-                }
-                
-                const seekMillis = Math.round((seekPercent / 100) * duration);
-                
-                if (isFinite(seekMillis) && seekMillis >= 0 && seekMillis <= duration) {
-                  console.log('Seeking to:', seekMillis, 'ms (', seekPercent.toFixed(1), '%)');
-                  seekTo(seekMillis);
-                } else {
-                  console.warn('Final validation failed:', { seekMillis, duration, seekPercent, clampedX });
-                }
-              }}
-            >
-              <View style={styles.progressBar}>
-                <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, progressPercent))}%` }]} />
-              </View>
-              <View 
-                style={[
-                  styles.progressHandle, 
-                  { 
-                    left: `${Math.min(100, Math.max(0, progressPercent))}%`,
+
+                  // Validate all inputs
+                  if (!duration || !isFinite(duration) || duration <= 0) {
+                    console.warn('Invalid duration:', duration);
+                    return;
                   }
-                ]} 
-              />
-            </TouchableOpacity>
+
+                  if (!progressBarWidth || !isFinite(progressBarWidth) || progressBarWidth <= 0) {
+                    console.warn('Invalid progressBarWidth:', progressBarWidth);
+                    return;
+                  }
+
+                  if (locationX === undefined || locationX === null || !isFinite(locationX)) {
+                    console.warn('Invalid locationX:', locationX);
+                    return;
+                  }
+
+                  // Calculate seek position
+                  const clampedX = Math.max(0, Math.min(progressBarWidth, locationX));
+                  const seekPercent = (clampedX / progressBarWidth) * 100;
+
+                  if (!isFinite(seekPercent) || seekPercent < 0 || seekPercent > 100) {
+                    console.warn('Invalid seekPercent:', seekPercent);
+                    return;
+                  }
+
+                  const seekMillis = Math.round((seekPercent / 100) * duration);
+
+                  if (isFinite(seekMillis) && seekMillis >= 0 && seekMillis <= duration) {
+                    seekTo(seekMillis);
+                  } else {
+                    console.warn('Final validation failed:', { seekMillis, duration, seekPercent, clampedX });
+                  }
+                }}
+              >
+                <View style={styles.progressBar}>
+                  <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, progressPercent))}%` }]} />
+                </View>
+                <View
+                  style={[
+                    styles.progressHandle,
+                    {
+                      left: `${Math.min(100, Math.max(0, progressPercent))}%`,
+                    }
+                  ]}
+                />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Time Display */}
@@ -304,34 +227,34 @@ export default function RoomDetail() {
 
           {/* Control Buttons */}
           <View style={styles.controlsContainer}>
-            <TouchableOpacity style={styles.controlButton}>
+            <TouchableOpacity style={styles.controlButton} disabled={Platform.OS === 'web'}>
               <Ionicons name="shuffle" size={24} color={Theme.text.secondary} />
             </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.controlButton}>
+
+            <TouchableOpacity style={styles.controlButton} disabled={Platform.OS === 'web'}>
               <Ionicons name="play-skip-back" size={28} color={Theme.text.primary} />
             </TouchableOpacity>
 
             <TouchableOpacity 
               style={[
                 styles.playButton,
-                (!sound || isLoading) && styles.playButtonDisabled
+                (isLoading || Platform.OS === 'web') && styles.playButtonDisabled
               ]}
               onPress={togglePlayPause}
-              disabled={!sound || isLoading}
+              disabled={isLoading || Platform.OS === 'web'}
             >
-              <Ionicons 
-                name={isPlaying ? "pause" : "play"} 
-                size={32} 
-                color={sound && !isLoading ? Theme.background.primary : Theme.text.muted} 
+              <Ionicons
+                name={isPlaying ? "pause" : "play"}
+                size={32}
+                color={!isLoading && Platform.OS !== 'web' ? Theme.background.primary : Theme.text.muted}
               />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.controlButton}>
+            <TouchableOpacity style={styles.controlButton} disabled={Platform.OS === 'web'}>
               <Ionicons name="play-skip-forward" size={28} color={Theme.text.primary} />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.controlButton}>
+            <TouchableOpacity style={styles.controlButton} disabled={Platform.OS === 'web'}>
               <Ionicons name="repeat" size={24} color={Theme.text.secondary} />
             </TouchableOpacity>
           </View>
@@ -406,6 +329,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  progressBarTouchable: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+  },
   progressBar: {
     height: 4,
     backgroundColor: Theme.background.border,
@@ -460,7 +389,7 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingLeft: 4, // Slight offset for play icon
+    paddingLeft: 4,
   },
   playButtonDisabled: {
     backgroundColor: Theme.background.border,
@@ -493,4 +422,3 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 });
-
