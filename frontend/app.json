@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "UIBackgroundModes": ["audio"]
-      }
+      },
+      "bundleIdentifier": "com.anonymous.frontend"
     },
     "android": {
       "adaptiveIcon": {
@@ -42,7 +43,7 @@
             "backgroundColor": "#000000"
           }
         }
-      ],
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
