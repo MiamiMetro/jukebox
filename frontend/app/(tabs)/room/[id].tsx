@@ -1,6 +1,7 @@
-import { View, Text, StyleSheet, Platform } from "react-native";
+import { View, Text, StyleSheet, Platform, TouchableOpacity } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRef } from "react";
+import { Image } from "expo-image";
 import WebNav from "../../../components/WebNav";
 import { Theme } from "../../../constants/theme";
 import { useLocalSearchParams, Stack } from "expo-router";
@@ -13,7 +14,7 @@ const currentSong: AudioTrackData = {
   title: 'Blinding Lights',
   artist: 'The Weeknd',
   thumbnail: 'https://picsum.photos/1000',
-  audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+  audioUrl: 'https://yhoyscexuxnouexhcndo.supabase.co/storage/v1/object/public/jukebox-tracks/zx6NkXvzrNc.webm',
 };
 
 export default function RoomDetail() {
@@ -41,11 +42,27 @@ export default function RoomDetail() {
       />
       <SafeAreaView style={styles.container} edges={Platform.OS === 'web' ? [] : ['top']}>
         {Platform.OS === 'web' && <WebNav />}
-        
+
+        {/* Now Playing Card */}
+        <View style={styles.nowPlayingCard}>
+          {currentSong.thumbnail && (
+            <Image
+              source={{ uri: currentSong.thumbnail }}
+              style={styles.thumbnail}
+              contentFit="cover"
+            />
+          )}
+          <View style={styles.songInfo}>
+            <Text style={styles.songTitle} numberOfLines={1}>{currentSong.title}</Text>
+            <Text style={styles.songArtist} numberOfLines={1}>{currentSong.artist}</Text>
+          </View>
+        </View>
+
         {/* Reusable AudioTrack Component */}
         <AudioTrack
           ref={audioTrackRef}
           track={currentSong}
+          showThumbnail={false}
           callbacks={{
             onPlay: () => console.log('Track started playing'),
             onPause: () => console.log('Track paused'),
@@ -73,6 +90,37 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.background.primary,
+  },
+  nowPlayingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Theme.background.nav,
+    marginHorizontal: 20,
+    marginTop: Platform.OS === 'web' ? 20 : 16,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Theme.background.border,
+  },
+  thumbnail: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    marginRight: 16,
+  },
+  songInfo: {
+    flex: 1,
+  },
+  songTitle: {
+    color: Theme.text.primary,
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  songArtist: {
+    color: Theme.text.secondary,
+    fontSize: 14,
   },
   canvas: {
     flex: 1,

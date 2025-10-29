@@ -500,6 +500,9 @@ const AudioTrack = forwardRef<AudioTrackRef, AudioTrackProps>((props, ref) => {
     }
   };
 
+  const dragStartPositionRef = useRef<number | null>(null);
+  const hasMovedRef = useRef(false);
+  
   const panResponder = useRef(
     Platform.OS !== 'web'
       ? PanResponder.create({
@@ -507,17 +510,43 @@ const AudioTrack = forwardRef<AudioTrackRef, AudioTrackProps>((props, ref) => {
           onMoveShouldSetPanResponder: () => true,
           onPanResponderGrant: (evt) => {
             const locationX = evt.nativeEvent.locationX;
-            handleDragStart(locationX);
+            dragStartPositionRef.current = locationX;
+            hasMovedRef.current = false;
           },
-          onPanResponderMove: (evt) => {
+          onPanResponderMove: (evt, gestureState) => {
             const locationX = evt.nativeEvent.locationX;
-            handleDragMove(locationX);
+            // If there's significant movement, start dragging
+            if (Math.abs(gestureState.dx) > 5 && !hasMovedRef.current) {
+              hasMovedRef.current = true;
+              // Start drag with current position when movement is detected
+              handleDragStart(locationX);
+            }
+            if (hasMovedRef.current) {
+              handleDragMove(locationX);
+            }
           },
-          onPanResponderRelease: () => {
-            handleDragEnd();
+          onPanResponderRelease: (evt) => {
+            const locationX = evt.nativeEvent.locationX;
+            
+            if (hasMovedRef.current) {
+              // This was a drag, handle drag end
+              handleDragEnd();
+            } else {
+              // This was a tap, seek to that position directly
+              const seekPos = calculateSeekPosition(locationX);
+              if (seekPos !== null) {
+                seekTo(seekPos);
+              }
+            }
+            dragStartPositionRef.current = null;
+            hasMovedRef.current = false;
           },
           onPanResponderTerminate: () => {
-            handleDragEnd();
+            if (hasMovedRef.current) {
+              handleDragEnd();
+            }
+            dragStartPositionRef.current = null;
+            hasMovedRef.current = false;
           },
         })
       : null
@@ -619,14 +648,14 @@ const AudioTrack = forwardRef<AudioTrackRef, AudioTrackProps>((props, ref) => {
                 onMouseLeave: handleWebEnd,
               } : {})}
             >
-              <TouchableOpacity
-                style={styles.progressBarTouchable}
-                activeOpacity={1}
-                onPress={(e) => {
-                  if (isDragging) return;
-                  
-                  let locationX: number | undefined;
-                  if (Platform.OS === 'web') {
+              {Platform.OS === 'web' ? (
+                <TouchableOpacity
+                  style={styles.progressBarTouchable}
+                  activeOpacity={1}
+                  onPress={(e) => {
+                    if (isDragging) return;
+                    
+                    let locationX: number | undefined;
                     const nativeEvent = e.nativeEvent as any;
                     const target = e.currentTarget as any;
                     if (target && target.getBoundingClientRect) {
@@ -635,30 +664,42 @@ const AudioTrack = forwardRef<AudioTrackRef, AudioTrackProps>((props, ref) => {
                     } else {
                       locationX = nativeEvent.locationX;
                     }
-                  } else {
-                    locationX = e.nativeEvent.locationX;
-                  }
 
-                  if (locationX !== undefined) {
-                    const seekPos = calculateSeekPosition(locationX);
-                    if (seekPos !== null) {
-                      seekTo(seekPos);
+                    if (locationX !== undefined) {
+                      const seekPos = calculateSeekPosition(locationX);
+                      if (seekPos !== null) {
+                        seekTo(seekPos);
+                      }
                     }
-                  }
-                }}
-              >
-                <View style={[styles.progressBar, customStyles.progressBar]}>
-                  <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, progressPercent))}%` }]} />
+                  }}
+                >
+                  <View style={[styles.progressBar, customStyles.progressBar]}>
+                    <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, progressPercent))}%` }]} />
+                  </View>
+                  <View
+                    style={[
+                      styles.progressHandle,
+                      {
+                        left: `${Math.min(100, Math.max(0, progressPercent))}%`,
+                      }
+                    ]}
+                  />
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.progressBarTouchable}>
+                  <View style={[styles.progressBar, customStyles.progressBar]}>
+                    <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, progressPercent))}%` }]} />
+                  </View>
+                  <View
+                    style={[
+                      styles.progressHandle,
+                      {
+                        left: `${Math.min(100, Math.max(0, progressPercent))}%`,
+                      }
+                    ]}
+                  />
                 </View>
-                <View
-                  style={[
-                    styles.progressHandle,
-                    {
-                      left: `${Math.min(100, Math.max(0, progressPercent))}%`,
-                    }
-                  ]}
-                />
-              </TouchableOpacity>
+              )}
             </View>
           </View>
         )}

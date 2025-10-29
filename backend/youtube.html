@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Permissions-Policy" content="autoplay=*, encrypted-media=*, accelerometer=*, gyroscope=*, picture-in-picture=*, clipboard-write=*, web-share=*" />
+  <title>FastAPI YouTube Sync Test</title>
+  <script>
+    // Unregister any existing service workers that might interfere
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for(let registration of registrations) {
+          registration.unregister();
+          console.log('Service worker unregistered');
+        }
+      });
+    }
+    
+    // Load YouTube IFrame API dynamically (like working example)
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    var firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+  </script>
+</head>
+<body>
+  <h2>WebSocket YouTube Sync Test</h2>
+
+  <button id="connectBtn" onclick="connect()">Connect</button>
+  <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+  <br><br>
+
+  <button onclick="sendPlay()">▶️ Play</button>
+  <button onclick="sendPause()">⏸️ Pause</button>
+  <button onclick="sendSeek()">⏩ Seek (to 60s)</button>
+  <button onclick="sendSetTrack()">🎵 Set Track</button>
+  <br><br>
+
+  <button onclick="sendPing()">Ping</button>
+  <button onclick="sendGetState()">Get State</button>
+
+  <br><br>
+  <hr>
+  <h3>YouTube Player</h3>
+  <label>
+    <input type="checkbox" id="syncCheckbox" onchange="handleSyncToggle()"> Sync to Server
+  </label>
+  <br>
+  <label>
+    <input type="checkbox" id="hostCheckbox" onchange="handleHostToggle()"> Host Mode
+  </label>
+  <br><br>
+  <div id="youtubePlayer" style="width: 100%; max-width: 640px; height: 360px; background-color: #000;"></div>
+  <br>
+  <div id="youtubeStatus"></div>
+
+  <h3>Messages: <button onclick="clearLogs()">Clear Logs</button></h3>
+  <pre id="log"></pre>
+
+  <script>
+    let ws = null;
+    let logBox = document.getElementById("log");
+    let youtubePlayer = null;
+    let isSynced = false;
+    let isHost = false;
+    let applyingServerUpdate = false; // Flag to prevent feedback loops
+    let serverOffset = 0; // Client time - Server time (for sync calculations)
+    let lastServerState = null; // Store last received server state for sync-on-enable
+    let playerInitialized = false; // Flag to prevent multiple initialization attempts
+
+    function log(message) {
+      logBox.textContent += message + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function clearLogs() {
+      logBox.textContent = "";
+    }
+
+    // Extract YouTube video ID from URL
+    function extractYouTubeId(url) {
+      if (!url) return null;
+      
+      // Handle various YouTube URL formats
+      const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+        /^([a-zA-Z0-9_-]{11})$/  // Direct video ID
+      ];
+      
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+      
+      return null;
+    }
+
+    // Initialize YouTube player when API is ready (simplified like working example)
+    function onYouTubeIframeAPIReady() {
+      if (youtubePlayer || playerInitialized) {
+        return; // Already initialized
+      }
+      
+      try {
+        playerInitialized = true;
+        
+        // Use responsive dimensions
+        const playerWidth = Math.min(640, window.innerWidth - 40);
+        const playerHeight = Math.round(playerWidth * 0.5625); // 16:9 aspect ratio
+        
+        youtubePlayer = new YT.Player('youtubePlayer', {
+          height: playerHeight.toString(),
+          width: playerWidth.toString(),
+          playerVars: {
+            'playsinline': 1,  // Critical for iOS
+            'controls': 1,
+            'rel': 0,
+            'modestbranding': 1,
+            'enablejsapi': 1,
+            'autoplay': 0,
+            'fs': 1
+          },
+          events: {
+            'onReady': onYoutubePlayerReady,
+            'onStateChange': onYoutubeStateChange,
+            'onError': onYoutubeError
+          }
+        });
+        log("🔄 YouTube player initializing...");
+      } catch (error) {
+        playerInitialized = false;
+        log("⚠️ Error initializing YouTube player: " + error);
+      }
+    }
+
+    function onYoutubeError(event) {
+      const errorMessages = {
+        2: "Invalid video parameter",
+        5: "HTML5 player error",
+        100: "Video not found",
+        101: "Video not allowed to play on embedded players",
+        150: "Video not allowed to play on embedded players"
+      };
+      
+      const errorMsg = errorMessages[event.data] || `Error code: ${event.data}`;
+      log("⚠️ YouTube player error: " + errorMsg);
+      
+      // If video unavailable on mobile, provide helpful message
+      if ((event.data === 101 || event.data === 150) && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
+        log("💡 Tip: This video may not allow embedding on mobile. Try a different video or play directly on YouTube.");
+      }
+    }
+
+    function onYoutubePlayerReady(event) {
+      log("✅ YouTube player ready");
+      updateYoutubeStatus();
+    }
+
+    function onYoutubeStateChange(event) {
+      // YouTube player states:
+      // -1 (unstarted), 0 (ended), 1 (playing), 2 (paused), 3 (buffering), 5 (cued)
+      
+      if (applyingServerUpdate) {
+        // Ignore state changes from server updates
+        return;
+      }
+
+      const state = event.data;
+      
+      // Handle play state (state 1)
+      if (state === YT.PlayerState.PLAYING) {
+        if (isHost && !applyingServerUpdate && ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "play" }));
+          log("➡️ [Host] Sent: play");
+        }
+      }
+      
+      // Handle pause state (state 2)
+      if (state === YT.PlayerState.PAUSED) {
+        if (isHost && !applyingServerUpdate && ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pause" }));
+          log("➡️ [Host] Sent: pause");
+        }
+      }
+
+      updateYoutubeStatus();
+    }
+
+    // Global variable for seek detection
+    let lastKnownTime = 0;
+    let seekPollInterval = null;
+
+    function setupYoutubeListeners() {
+      // YouTube IFrame API doesn't have event listeners like audio
+      // State changes are handled via onStateChange callback
+      // We'll use polling for seek detection
+      
+      // Clear any existing interval
+      if (seekPollInterval) {
+        clearInterval(seekPollInterval);
+      }
+      
+      // Poll for seek detection when user manually seeks
+      seekPollInterval = setInterval(() => {
+        if (!youtubePlayer || applyingServerUpdate || !isHost) return;
+        
+        try {
+          const currentTime = youtubePlayer.getCurrentTime();
+          const playerState = youtubePlayer.getPlayerState();
+          
+          // Detect significant time jump (seek) - more than 2 seconds difference
+          if (Math.abs(currentTime - lastKnownTime) > 2 && 
+              (playerState === YT.PlayerState.PLAYING || playerState === YT.PlayerState.PAUSED) &&
+              ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "seek", payload: { position: currentTime } }));
+            log("➡️ [Host] Sent: seek → " + currentTime.toFixed(2) + "s");
+          }
+          
+          lastKnownTime = currentTime;
+        } catch (e) {
+          // Player not ready
+        }
+      }, 500);
+    }
+
+    function handleSyncToggle() {
+      const syncCheckbox = document.getElementById("syncCheckbox");
+      isSynced = syncCheckbox.checked;
+      
+      if (isSynced) {
+        // Sync enabled - request current state from server
+        log("🔄 Sync enabled");
+        if (ws?.readyState === WebSocket.OPEN) {
+          // Request current state from server
+          ws.send(JSON.stringify({ type: "get_state" }));
+          log("➡️ Sent: get_state");
+        }
+        // Apply last known server state if available (while waiting for fresh state)
+        if (lastServerState) {
+          handleServerUpdate(lastServerState);
+        }
+      } else {
+        log("🔓 Sync disabled");
+      }
+      updateYoutubeStatus();
+    }
+
+    function handleHostToggle() {
+      const hostCheckbox = document.getElementById("hostCheckbox");
+      isHost = hostCheckbox.checked;
+      
+      if (isHost) {
+        log("🎮 Host mode enabled - your actions will broadcast to all clients");
+        setupYoutubeListeners();
+      } else {
+        log("👤 Host mode disabled");
+      }
+      updateYoutubeStatus();
+    }
+
+    function updateYoutubeStatus() {
+      const statusDiv = document.getElementById("youtubeStatus");
+      if (!youtubePlayer) {
+        statusDiv.textContent = "Loading YouTube player...";
+        return;
+      }
+      
+      try {
+        const currentTime = youtubePlayer.getCurrentTime() || 0;
+        const duration = youtubePlayer.getDuration() || 0;
+        const playerState = youtubePlayer.getPlayerState();
+        let stateText = "";
+        
+        switch(playerState) {
+          case YT.PlayerState.PLAYING: stateText = "Playing"; break;
+          case YT.PlayerState.PAUSED: stateText = "Paused"; break;
+          case YT.PlayerState.BUFFERING: stateText = "Buffering"; break;
+          case YT.PlayerState.CUED: stateText = "Cued"; break;
+          case YT.PlayerState.ENDED: stateText = "Ended"; break;
+          default: stateText = "Unknown"; break;
+        }
+        
+        let status = `Time: ${currentTime.toFixed(2)}s / ${duration.toFixed(2)}s | ${stateText} | `;
+        status += isSynced ? "🟢 Synced" : "⚪ Not Synced";
+        if (isHost) {
+          status += " | 🎮 Host";
+        }
+        statusDiv.textContent = status;
+      } catch (e) {
+        statusDiv.textContent = "Player not ready";
+      }
+    }
+
+    function setYouTubeVideo(videoId) {
+      if (!youtubePlayer || !videoId) {
+        log("⚠️ Cannot set video: player=" + !!youtubePlayer + ", videoId=" + videoId);
+        return;
+      }
+      
+      // Validate video ID format (YouTube IDs are 11 characters)
+      if (videoId.length !== 11) {
+        log("⚠️ Invalid YouTube video ID format (expected 11 chars): " + videoId + " (length: " + videoId.length + ")");
+        return;
+      }
+      
+      log("🎵 Attempting to load YouTube video ID: " + videoId);
+      
+      try {
+        // Check if player is ready
+        if (typeof youtubePlayer.getVideoData !== 'function') {
+          log("⚠️ YouTube player not ready yet, waiting...");
+          setTimeout(() => setYouTubeVideo(videoId), 500);
+          return;
+        }
+        
+        const videoData = youtubePlayer.getVideoData();
+        const currentVideoId = videoData?.video_id;
+        
+        if (currentVideoId === videoId) {
+          // Already loaded this video
+          log("ℹ️ Video already loaded: " + videoId);
+          return;
+        }
+        
+        // Detect mobile Safari
+        const isMobileSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+        
+        // Try to load the video - on mobile we use loadVideoById which works better
+        try {
+          if (isMobileSafari) {
+            // For mobile Safari, use loadVideoById (loads video but requires user to play)
+            youtubePlayer.loadVideoById({
+              videoId: videoId,
+              startSeconds: 0
+            });
+            log("🎵 YouTube video loaded for mobile: " + videoId);
+          } else {
+            // For desktop, use cueVideoById (doesn't start playing)
+            youtubePlayer.cueVideoById(videoId);
+            log("🎵 YouTube video set to: " + videoId);
+          }
+        } catch (e) {
+          // Fallback: try simple loadVideoById for both
+          try {
+            youtubePlayer.loadVideoById(videoId);
+            log("🎵 YouTube video loaded: " + videoId + " (fallback method)");
+          } catch (e2) {
+            log("⚠️ Error loading video: " + e2 + ". Video may not allow embedding on this device.");
+          }
+        }
+      } catch (e) {
+        log("⚠️ Error setting YouTube video: " + e);
+      }
+    }
+
+    function handleServerUpdate(data) {
+      if (!youtubePlayer) return;
+      
+      applyingServerUpdate = true;
+      
+      try {
+        if (data.type === "state_sync") {
+          // Initial sync - apply current server state
+          const state = data.payload;
+          if (state.track) {
+            // Extract video ID from track URL
+            log("📥 Received track from server: " + state.track);
+            const videoId = extractYouTubeId(state.track);
+            
+            if (videoId) {
+              log("✅ Extracted YouTube video ID: " + videoId);
+              // Wait for player to be ready before loading video
+              const loadVideo = () => {
+                if (!youtubePlayer || (typeof youtubePlayer.loadVideoById !== 'function' && typeof youtubePlayer.cueVideoById !== 'function')) {
+                  setTimeout(loadVideo, 500);
+                  return;
+                }
+                setYouTubeVideo(videoId);
+              };
+              
+              // Start loading video
+              loadVideo();
+              
+              // Wait for video to be ready, then sync position
+              const syncPosition = () => {
+                try {
+                  const playerState = youtubePlayer.getPlayerState();
+                  const isMobileSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+                  
+                  if (playerState !== YT.PlayerState.UNSTARTED && playerState !== YT.PlayerState.BUFFERING) {
+                    if (state.is_playing && state.start_time) {
+                      // Calculate current position: server_time - start_time
+                      const serverTime = data.server_time;
+                      const currentPos = serverTime - state.start_time;
+                      youtubePlayer.seekTo(Math.max(0, currentPos), true);
+                      
+                      // On mobile Safari, don't auto-play - requires user interaction
+                      if (isMobileSafari) {
+                        log("🔄 [Sync] Video cued on mobile - tap play button to start");
+                      } else {
+                        setTimeout(() => youtubePlayer.playVideo(), 100);
+                        log("🔄 [Sync] Playing from position: " + currentPos.toFixed(2) + "s");
+                      }
+                    } else {
+                      // Paused - use stored position
+                      youtubePlayer.seekTo(state.position || 0, true);
+                      youtubePlayer.pauseVideo();
+                      log("🔄 [Sync] Paused at position: " + (state.position || 0).toFixed(2) + "s");
+                    }
+                    lastKnownTime = state.position || (state.is_playing && state.start_time ? (data.server_time - state.start_time) : 0);
+                  } else {
+                    // Retry after a delay if player not ready
+                    setTimeout(syncPosition, 500);
+                  }
+                } catch (e) {
+                  // Retry if error
+                  setTimeout(syncPosition, 500);
+                }
+              };
+              
+              // Start syncing position after video loads (poll until ready)
+              setTimeout(syncPosition, 1000);
+            } else {
+              log("⚠️ Track from server is not a YouTube URL: " + state.track);
+              log("💡 Set a YouTube URL in the server state (e.g., https://www.youtube.com/watch?v=VIDEO_ID)");
+            }
+            
+            serverOffset = Date.now() / 1000 - data.server_time;
+          } else {
+            // No track set on server - preserve current state
+            serverOffset = Date.now() / 1000 - data.server_time;
+            log("🔄 [Sync] Enabled (no track on server, preserving current state)");
+          }
+        } else if (data.type === "play") {
+          // Server says play - calculate position from start_time
+          if (data.payload && data.payload.start_time) {
+            const serverTime = data.server_time;
+            const currentPos = serverTime - data.payload.start_time;
+            const isMobileSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+            
+            youtubePlayer.seekTo(Math.max(0, currentPos), true);
+            
+            // On mobile Safari, we can only play after user interaction
+            // So we'll cue it ready but let the user tap play
+            if (isMobileSafari) {
+              log("▶️ [Sync] Video cued on mobile - user tap required to play");
+              // Don't call playVideo() on mobile - requires user interaction
+            } else {
+              youtubePlayer.playVideo();
+              log("▶️ [Sync] Play from: " + currentPos.toFixed(2) + "s");
+            }
+            serverOffset = Date.now() / 1000 - serverTime;
+          }
+        } else if (data.type === "pause") {
+          // Server says pause - pause at specified position
+          if (data.payload && typeof data.payload.position === "number") {
+            youtubePlayer.seekTo(data.payload.position, true);
+            youtubePlayer.pauseVideo();
+            log("⏸️ [Sync] Pause at: " + data.payload.position.toFixed(2) + "s");
+          }
+        } else if (data.type === "seek") {
+          // Server says seek - move to position
+          if (data.payload && typeof data.payload.position === "number") {
+            const wasPlaying = youtubePlayer.getPlayerState() === YT.PlayerState.PLAYING;
+            youtubePlayer.seekTo(data.payload.position, true);
+            if (wasPlaying) {
+              youtubePlayer.playVideo();
+            }
+            log("⏩ [Sync] Seek to: " + data.payload.position.toFixed(2) + "s");
+          }
+        } else if (data.type === "set_track") {
+          // Track changed
+          if (data.payload && data.payload.track) {
+            const videoId = extractYouTubeId(data.payload.track);
+            if (videoId) {
+              setYouTubeVideo(videoId);
+              youtubePlayer.seekTo(0, true);
+              youtubePlayer.pauseVideo();
+              log("🎵 [Sync] Track set, reset position");
+            } else {
+              log("⚠️ Invalid YouTube URL: " + data.payload.track);
+            }
+          }
+        } else if (data.type === "pong") {
+          // Calculate server offset for future sync calculations
+          serverOffset = Date.now() / 1000 - data.server_time;
+        }
+      } catch (error) {
+        log("⚠️ Error applying server update: " + error);
+      } finally {
+        // Small delay to ensure YouTube events have processed
+        setTimeout(() => {
+          applyingServerUpdate = false;
+        }, 200);
+      }
+      
+      updateYoutubeStatus();
+    }
+
+    function connect() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const host = window.location.hostname || "localhost";
+      const port = 8000;
+      const wsUrl = `${protocol}//${host}:${port}/ws`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        log("✅ Connected to " + wsUrl);
+        document.getElementById("connectBtn").disabled = true;
+        document.getElementById("disconnectBtn").disabled = false;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          log("📩 " + JSON.stringify(data, null, 2));
+          
+          // Store state_sync messages for later use
+          if (data.type === "state_sync") {
+            lastServerState = data;
+            // Always set video source from server (even when not synced)
+            if (data.payload && data.payload.track) {
+              const videoId = extractYouTubeId(data.payload.track);
+              if (videoId && youtubePlayer) {
+                setYouTubeVideo(videoId);
+              }
+            }
+          }
+          
+          // Handle server updates when synced
+          if (isSynced && data.type) {
+            handleServerUpdate(data);
+          }
+          
+          // Handle set_track even when not synced (to update video source)
+          if (!isSynced && data.type === "set_track" && data.payload && data.payload.track) {
+            const videoId = extractYouTubeId(data.payload.track);
+            if (videoId && youtubePlayer) {
+              setYouTubeVideo(videoId);
+            }
+          }
+        } catch {
+          log("📩 " + event.data);
+        }
+      };
+
+      ws.onclose = () => {
+        log("❌ Disconnected");
+        document.getElementById("connectBtn").disabled = false;
+        document.getElementById("disconnectBtn").disabled = true;
+      };
+
+      ws.onerror = (err) => {
+        log("⚠️ Error: " + err);
+      };
+    }
+
+    function disconnect() {
+      if (ws) ws.close();
+    }
+
+    function sendPlay() {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "play" }));
+        log("➡️ Sent: play");
+      }
+    }
+
+    function sendPause() {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "pause" }));
+        log("➡️ Sent: pause");
+      }
+    }
+
+    function sendSeek() {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "seek", payload: { position: 60 } }));
+        log("➡️ Sent: seek → 60s");
+      }
+    }
+
+    function sendSetTrack() {
+      if (ws?.readyState === WebSocket.OPEN) {
+        // Example: set to a YouTube video
+        ws.send(JSON.stringify({ type: "set_track", payload: { track: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } }));
+        log("➡️ Sent: set_track");
+      }
+    }
+
+    function sendPing() {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping", client_time: Date.now() / 1000 }));
+        log("➡️ Sent: ping");
+      }
+    }
+
+    function sendGetState() {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "get_state" }));
+        log("➡️ Sent: get_state");
+      }
+    }
+
+    // Update status periodically
+    setInterval(() => {
+      if (isSynced && youtubePlayer) {
+        updateYoutubeStatus();
+      }
+    }, 1000);
+  </script>
+</body>
+</html>
+
