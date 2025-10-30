@@ -18,7 +18,7 @@ createRoot(document.getElementById('root')!).render(
 
       {/* Only show Devtools during development */}
       {import.meta.env.DEV && (
-        <ReactQueryDevtools initialIsOpen={false} position="bottom" />
+        <ReactQueryDevtools initialIsOpen={false} position="bottom" buttonPosition='top-right' />
       )}
     </QueryClientProvider>
   </StrictMode>,

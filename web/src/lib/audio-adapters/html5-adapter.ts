@@ -1,0 +1,116 @@
+import type { AudioPlayerAdapter } from "@/types/audio-player"
+
+export class HTML5AudioAdapter implements AudioPlayerAdapter {
+  private audio: HTMLAudioElement
+  private timeUpdateCallback?: (time: number) => void
+  private durationChangeCallback?: (duration: number) => void
+  private endedCallback?: () => void
+  private playCallback?: () => void
+  private pauseCallback?: () => void
+  private bufferingCallback?: (isBuffering: boolean) => void
+
+  constructor() {
+    this.audio = new Audio()
+    this.setupEventListeners()
+  }
+
+  private setupEventListeners() {
+    this.audio.addEventListener("timeupdate", () => {
+      this.timeUpdateCallback?.(this.audio.currentTime)
+    })
+
+    this.audio.addEventListener("durationchange", () => {
+      this.durationChangeCallback?.(this.audio.duration)
+    })
+
+    this.audio.addEventListener("ended", () => {
+      this.endedCallback?.()
+    })
+
+    this.audio.addEventListener("play", () => {
+      this.playCallback?.()
+    })
+
+    this.audio.addEventListener("pause", () => {
+      this.pauseCallback?.()
+    })
+
+    this.audio.addEventListener("waiting", () => {
+      this.bufferingCallback?.(true)
+    })
+
+    this.audio.addEventListener("canplay", () => {
+      this.bufferingCallback?.(false)
+    })
+  }
+
+  async load(url: string): Promise<void> {
+    this.audio.src = url
+    this.audio.load()
+    return new Promise((resolve) => {
+      this.audio.addEventListener("loadedmetadata", () => resolve(), { once: true })
+    })
+  }
+
+  async play(): Promise<void> {
+    await this.audio.play()
+  }
+
+  pause(): void {
+    this.audio.pause()
+  }
+
+  seek(time: number): void {
+    this.audio.currentTime = time
+  }
+
+  setVolume(volume: number): void {
+    this.audio.volume = Math.max(0, Math.min(1, volume))
+  }
+
+  mute(): void {
+    this.audio.muted = true
+  }
+
+  unmute(): void {
+    this.audio.muted = false
+  }
+
+  getCurrentTime(): number {
+    return this.audio.currentTime
+  }
+
+  getDuration(): number {
+    return this.audio.duration || 0
+  }
+
+  destroy(): void {
+    this.audio.pause()
+    this.audio.src = ""
+    this.audio.load()
+  }
+
+  onTimeUpdate(callback: (time: number) => void): void {
+    this.timeUpdateCallback = callback
+  }
+
+  onDurationChange(callback: (duration: number) => void): void {
+    this.durationChangeCallback = callback
+  }
+
+  onEnded(callback: () => void): void {
+    this.endedCallback = callback
+  }
+
+  onPlay(callback: () => void): void {
+    this.playCallback = callback
+  }
+
+  onPause(callback: () => void): void {
+    this.pauseCallback = callback
+  }
+
+  onBuffering(callback: (isBuffering: boolean) => void): void {
+    this.bufferingCallback = callback
+  }
+}
