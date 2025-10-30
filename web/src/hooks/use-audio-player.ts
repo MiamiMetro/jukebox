@@ -74,6 +74,23 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       await adapter.load(track.url)
       setCurrentTrack(track)
 
+      // Apply persisted volume/mute on the new adapter
+      try {
+        const persistedVolume = localStorage.getItem("jukebox.volume")
+        const persistedMuted = localStorage.getItem("jukebox.isMuted")
+        if (persistedVolume !== null) {
+          const v = Math.max(0, Math.min(1, parseFloat(persistedVolume)))
+          adapter.setVolume(v)
+          setPlayerState((prev) => ({ ...prev, volume: v }))
+        }
+        if (persistedMuted !== null) {
+          const isMuted = persistedMuted === "true"
+          if (isMuted) adapter.mute()
+          else adapter.unmute()
+          setPlayerState((prev) => ({ ...prev, isMuted }))
+        }
+      } catch {}
+
       if (playerState.isPlaying) {
         await adapter.play()
       }
@@ -101,11 +118,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     }
   }, [mode])
 
-  // Seek (only for host mode or when not live in listener mode)
+  // Programmatic seek: always allowed; UI gating handled in component
   const seek = useCallback(
     (time: number) => {
-      if (mode === "host" && adapterRef.current) {
+      if (adapterRef.current) {
         adapterRef.current.seek(time)
+        if (mode === "listener") {
+          setPlayerState((prev) => ({ ...prev, isLive: false }))
+        }
       }
     },
     [mode],
@@ -148,6 +168,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (adapterRef.current) {
       adapterRef.current.setVolume(volume)
       setPlayerState((prev) => ({ ...prev, volume }))
+      try {
+        localStorage.setItem("jukebox.volume", String(Math.max(0, Math.min(1, volume))))
+      } catch {}
     }
   }, [])
 
@@ -160,6 +183,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         adapterRef.current.mute()
       }
       setPlayerState((prev) => ({ ...prev, isMuted: !prev.isMuted }))
+      try {
+        localStorage.setItem("jukebox.isMuted", String(!playerState.isMuted))
+      } catch {}
     }
   }, [playerState.isMuted])
 
@@ -183,6 +209,19 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         adapterRef.current.destroy()
       }
     }
+  }, [])
+
+  // On mount, hydrate initial volume/mute from localStorage
+  useEffect(() => {
+    try {
+      const persistedVolume = localStorage.getItem("jukebox.volume")
+      const persistedMuted = localStorage.getItem("jukebox.isMuted")
+      setPlayerState((prev) => ({
+        ...prev,
+        volume: persistedVolume !== null ? Math.max(0, Math.min(1, parseFloat(persistedVolume))) : prev.volume,
+        isMuted: persistedMuted !== null ? persistedMuted === "true" : prev.isMuted,
+      }))
+    } catch {}
   }, [])
 
   return {

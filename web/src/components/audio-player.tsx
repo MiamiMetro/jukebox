@@ -18,7 +18,7 @@ import {
   Undo2,
   Redo2,
 } from "lucide-react"
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useMemo } from "react"
 import { cn } from "@/lib/utils"
 
 interface AudioPlayerProps {
@@ -27,6 +27,18 @@ interface AudioPlayerProps {
   variant?: PlayerVariant
   onTrackEnd?: () => void
   onTimeSync?: (time: number) => void
+  events?: {
+    onPlay?: () => void
+    onPause?: () => void
+    onSeek?: (time: number) => void
+    onVolumeChange?: (volume: number) => void
+    onMuteChange?: (isMuted: boolean) => void
+    onShuffleChange?: (enabled: boolean) => void
+    onRepeatChange?: (mode: "off" | "all" | "one") => void
+    onTimeUpdate?: (time: number) => void
+    onDurationChange?: (duration: number) => void
+    onBufferingChange?: (isBuffering: boolean) => void
+  }
   liveTime?: number
   className?: string
   onNext?: () => void
@@ -54,6 +66,7 @@ export function AudioPlayer({
   variant = "full",
   onTrackEnd,
   onTimeSync,
+  events,
   liveTime = 0,
   className,
   onNext,
@@ -82,23 +95,26 @@ export function AudioPlayer({
   const volumeSliderRef = useRef<HTMLDivElement>(null)
   const progressSliderRef = useRef<HTMLDivElement>(null)
 
+  // Keep latest player state in a ref so getState can read it without
+  // forcing onPlayerReady effect to re-run on every state change
+  const latestStateRef = useRef(playerState)
   useEffect(() => {
-    if (onPlayerReady) {
-      onPlayerReady({
-        play,
-        pause,
-        seek,
-        skipForward,
-        skipBackward,
-        setVolume,
-        toggleMute,
-        toggleShuffle,
-        toggleRepeat,
-        getState: () => playerState,
-      })
-    }
-  }, [
-    onPlayerReady,
+    latestStateRef.current = playerState
+  }, [playerState])
+
+  const controls = useMemo(
+    () => ({
+      play,
+      pause,
+      seek,
+      skipForward,
+      skipBackward,
+      setVolume,
+      toggleMute,
+      toggleShuffle,
+      toggleRepeat,
+      getState: () => latestStateRef.current,
+    }), [
     play,
     pause,
     seek,
@@ -108,8 +124,14 @@ export function AudioPlayer({
     toggleMute,
     toggleShuffle,
     toggleRepeat,
-    playerState,
-  ])
+  ]
+  )
+
+  useEffect(() => {
+    if (onPlayerReady) {
+      onPlayerReady(controls)
+    }
+  }, [onPlayerReady, controls])
 
   useEffect(() => {
     const handleWheel = (e: WheelEvent) => {
@@ -122,6 +144,7 @@ export function AudioPlayer({
           const seekAmount = e.deltaY > 0 ? -5 : 5
           const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + seekAmount))
           seek(newTime)
+          events?.onSeek?.(newTime)
         }
       }
       // Check if hovering over volume slider for volume control (with larger hitbox)
@@ -131,6 +154,7 @@ export function AudioPlayer({
           const volumeChange = e.deltaY > 0 ? -0.05 : 0.05
           const newVolume = Math.max(0, Math.min(1, playerState.volume + volumeChange))
           setVolume(newVolume)
+          events?.onVolumeChange?.(newVolume)
         }
       }
     }
@@ -140,7 +164,7 @@ export function AudioPlayer({
       element.addEventListener("wheel", handleWheel, { passive: false })
       return () => element.removeEventListener("wheel", handleWheel)
     }
-  }, [scrollControls, mode, playerState.currentTime, playerState.duration, playerState.volume, seek, setVolume])
+  }, [scrollControls, mode, playerState.currentTime, playerState.duration, playerState.volume, seek, setVolume, events])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -148,17 +172,21 @@ export function AudioPlayer({
       if (playerRef.current?.contains(document.activeElement) && mode === "host") {
         if (e.key === "ArrowLeft") {
           e.preventDefault()
-          skipBackward(5)
+          const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime - 5))
+          seek(newTime)
+          events?.onSeek?.(newTime)
         } else if (e.key === "ArrowRight") {
           e.preventDefault()
-          skipForward(5)
+          const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + 5))
+          seek(newTime)
+          events?.onSeek?.(newTime)
         }
       }
     }
 
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [mode, skipBackward, skipForward])
+  }, [mode, playerState.currentTime, playerState.duration, seek, events])
 
   useEffect(() => {
     if (track && track.id !== currentTrack?.id) {
@@ -175,17 +203,66 @@ export function AudioPlayer({
 
   const handleSeek = (value: number[]) => {
     if (mode === "host") {
-      seek(value[0])
+      const time = value[0]
+      seek(time)
+      events?.onSeek?.(time)
     }
+  }
+
+  const handleSkipBy = (seconds: number) => {
+    if (mode !== "host") return
+    const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + seconds))
+    seek(newTime)
+    events?.onSeek?.(newTime)
+  }
+
+  const handleVolumeChange = (value: number) => {
+    setVolume(value)
+    events?.onVolumeChange?.(value)
+  }
+
+  const handleToggleMute = () => {
+    const next = !playerState.isMuted
+    toggleMute()
+    events?.onMuteChange?.(next)
+  }
+
+  const handleToggleShuffle = () => {
+    const next = !playerState.shuffle
+    toggleShuffle()
+    events?.onShuffleChange?.(next)
+  }
+
+  const handleToggleRepeat = () => {
+    const modes: Array<"off" | "all" | "one"> = ["off", "all", "one"]
+    const currentIndex = modes.indexOf(playerState.repeat as any)
+    const nextMode = modes[(currentIndex + 1) % modes.length]
+    toggleRepeat()
+    events?.onRepeatChange?.(nextMode)
   }
 
   const handlePlayPause = () => {
     if (playerState.isPlaying) {
       pause()
+      events?.onPause?.()
     } else {
       play()
+      events?.onPlay?.()
     }
   }
+
+  // Emit time/duration/buffering updates
+  useEffect(() => {
+    events?.onTimeUpdate?.(playerState.currentTime)
+  }, [playerState.currentTime, events])
+
+  useEffect(() => {
+    events?.onDurationChange?.(playerState.duration)
+  }, [playerState.duration, events])
+
+  useEffect(() => {
+    events?.onBufferingChange?.(playerState.isBuffering)
+  }, [playerState.isBuffering, events])
 
   if (!track) {
     return null
@@ -219,7 +296,7 @@ export function AudioPlayer({
             </div>
             {/* Volume control in top right */}
             <div className="flex items-center gap-1.5 shrink-0">
-              <Button size="icon" variant="ghost" onClick={toggleMute} className="h-7 w-7">
+              <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-7 w-7">
                 {playerState.isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
               </Button>
               <div ref={volumeSliderRef} className="w-16 py-2">
@@ -227,7 +304,7 @@ export function AudioPlayer({
                   value={[playerState.isMuted ? 0 : playerState.volume]}
                   max={1}
                   step={0.01}
-                  onValueChange={(value) => setVolume(value[0])}
+                  onValueChange={(value) => handleVolumeChange(value[0])}
                 />
               </div>
             </div>
@@ -255,7 +332,7 @@ export function AudioPlayer({
             <Button
               size="icon"
               variant="ghost"
-              onClick={toggleShuffle}
+              onClick={handleToggleShuffle}
               className={cn(
                 "h-8 w-8 transition-colors",
                 playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
@@ -269,7 +346,7 @@ export function AudioPlayer({
               </Button>
             )}
             {mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={() => skipBackward(5)} className="h-8 w-8">
+              <Button size="icon" variant="ghost" onClick={() => handleSkipBy(-5)} className="h-8 w-8">
                 <Undo2 className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -277,7 +354,7 @@ export function AudioPlayer({
               {playerState.isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             </Button>
             {mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={() => skipForward(5)} className="h-8 w-8">
+              <Button size="icon" variant="ghost" onClick={() => handleSkipBy(5)} className="h-8 w-8">
                 <Redo2 className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -289,7 +366,7 @@ export function AudioPlayer({
             <Button
               size="icon"
               variant="ghost"
-              onClick={toggleRepeat}
+              onClick={handleToggleRepeat}
               className={cn(
                 "h-8 w-8 transition-colors",
                 playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
@@ -324,7 +401,7 @@ export function AudioPlayer({
               <Button
                 size="icon"
                 variant="ghost"
-                onClick={toggleShuffle}
+                onClick={handleToggleShuffle}
                 className={cn(
                   "h-9 w-9 transition-colors",
                   playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
@@ -338,7 +415,7 @@ export function AudioPlayer({
                 </Button>
               )}
               {mode === "host" && (
-                <Button size="icon" variant="ghost" onClick={() => skipBackward(5)} className="h-9 w-9">
+                <Button size="icon" variant="ghost" onClick={() => handleSkipBy(-5)} className="h-9 w-9">
                   <Undo2 className="h-4 w-4" />
                 </Button>
               )}
@@ -346,7 +423,7 @@ export function AudioPlayer({
                 {playerState.isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
               </Button>
               {mode === "host" && (
-                <Button size="icon" variant="ghost" onClick={() => skipForward(5)} className="h-9 w-9">
+                <Button size="icon" variant="ghost" onClick={() => handleSkipBy(5)} className="h-9 w-9">
                   <Redo2 className="h-4 w-4" />
                 </Button>
               )}
@@ -387,7 +464,7 @@ export function AudioPlayer({
 
             {/* Volume */}
             <div className="flex items-center gap-2 w-28 shrink-0 ml-2">
-              <Button size="icon" variant="ghost" onClick={toggleMute} className="h-8 w-8">
+              <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-8 w-8">
                 {playerState.isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
               </Button>
               <div ref={volumeSliderRef} className="flex-1 py-2">
@@ -395,7 +472,7 @@ export function AudioPlayer({
                   value={[playerState.isMuted ? 0 : playerState.volume]}
                   max={1}
                   step={0.01}
-                  onValueChange={(value) => setVolume(value[0])}
+                  onValueChange={(value) => handleVolumeChange(value[0])}
                 />
               </div>
             </div>
@@ -466,7 +543,7 @@ export function AudioPlayer({
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           {/* Volume controls */}
           <div className="flex items-center gap-2 w-full md:w-auto">
-            <Button size="icon" variant="ghost" onClick={toggleMute} className="h-9 w-9">
+            <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-9 w-9">
               {playerState.isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
             </Button>
             <div ref={volumeSliderRef} className="w-24 md:w-28 py-2">
@@ -474,7 +551,7 @@ export function AudioPlayer({
                 value={[playerState.isMuted ? 0 : playerState.volume]}
                 max={1}
                 step={0.01}
-                onValueChange={(value) => setVolume(value[0])}
+                onValueChange={(value) => handleVolumeChange(value[0])}
                 className="w-full"
               />
             </div>
@@ -485,7 +562,7 @@ export function AudioPlayer({
             <Button
               size="icon"
               variant="ghost"
-              onClick={toggleShuffle}
+              onClick={handleToggleShuffle}
               className={cn(
                 "h-9 w-9 transition-colors",
                 playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
@@ -501,7 +578,7 @@ export function AudioPlayer({
             )}
 
             {mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={() => skipBackward(5)} className="h-9 w-9">
+              <Button size="icon" variant="ghost" onClick={() => handleSkipBy(-5)} className="h-9 w-9">
                 <Undo2 className="h-4 w-4" />
               </Button>
             )}
@@ -517,7 +594,7 @@ export function AudioPlayer({
             </Button>
 
             {mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={() => skipForward(5)} className="h-9 w-9">
+              <Button size="icon" variant="ghost" onClick={() => handleSkipBy(5)} className="h-9 w-9">
                 <Redo2 className="h-4 w-4" />
               </Button>
             )}
@@ -531,7 +608,7 @@ export function AudioPlayer({
             <Button
               size="icon"
               variant="ghost"
-              onClick={toggleRepeat}
+              onClick={handleToggleRepeat}
               className={cn(
                 "h-9 w-9 transition-colors",
                 playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",

@@ -20,8 +20,19 @@ state = {
 
 async def broadcast(data: dict):
     msg = json.dumps(data)
+    dead = []
     for c in list(clients):
-        await c.send_text(msg)
+        try:
+            await c.send_text(msg)
+        except Exception:
+            # collect dead/closed websockets to remove
+            dead.append(c)
+    for c in dead:
+        try:
+            await c.close()
+        except Exception:
+            pass
+        clients.discard(c)
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
