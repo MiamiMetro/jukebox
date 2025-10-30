@@ -44,46 +44,50 @@ async def ws_endpoint(ws: WebSocket):
 
             if t == "play":
                 # set authoritative start time
+                now = time.time()
                 state["is_playing"] = True
-                state["start_time"] = time.time() - state["position"]
+                state["start_time"] = now - state["position"]
                 await broadcast({
                     "type": "play",
                     "payload": {
                         "start_time": state["start_time"]
                     },
-                    "server_time": time.time()
+                    "server_time": now
                 })
 
             elif t == "pause":
+                now = time.time()
                 if state["is_playing"]:
-                    state["position"] = time.time() - state["start_time"]
+                    state["position"] = now - state["start_time"]
                     state["is_playing"] = False
                 await broadcast({
                     "type": "pause",
                     "payload": {"position": state["position"]},
-                    "server_time": time.time()
+                    "server_time": now
                 })
 
             elif t == "seek":
                 # move to a new playback position
+                now = time.time()
                 new_pos = data["payload"]["position"]
                 state["position"] = new_pos
                 if state["is_playing"]:
-                    state["start_time"] = time.time() - new_pos
+                    state["start_time"] = now - new_pos
                 await broadcast({
                     "type": "seek",
                     "payload": {"position": new_pos},
-                    "server_time": time.time()
+                    "server_time": now
                 })
 
             elif t == "set_track":
+                now = time.time()
                 state["track"] = data["payload"]["track"]
                 state["position"] = 0.0
                 state["is_playing"] = False
                 await broadcast({
                     "type": "set_track",
                     "payload": {"track": state["track"]},
-                    "server_time": time.time()
+                    "server_time": now
                 })
 
             elif t == "ping":

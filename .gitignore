@@ -9,7 +9,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-bin/
-lib/
-share/
+/bin/
+/lib/
+/share/
 pyvenv.cfg
