@@ -53,11 +53,27 @@ export class HTML5AudioAdapter implements AudioPlayerAdapter {
   }
 
   async play(): Promise<void> {
-    await this.audio.play()
+    // Check if audio has a source and is ready before playing
+    if (this.audio.src && this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      try {
+        await this.audio.play()
+      } catch (error) {
+        // Silently handle play errors (audio not ready, source not loaded, etc.)
+        console.debug("Play failed:", error)
+      }
+    }
   }
 
   pause(): void {
-    this.audio.pause()
+    // Check if audio has a source before pausing (safe to call even without source)
+    if (this.audio.src) {
+      try {
+        this.audio.pause()
+      } catch (error) {
+        // Silently handle pause errors
+        console.debug("Pause failed:", error)
+      }
+    }
   }
 
   seek(time: number): void {

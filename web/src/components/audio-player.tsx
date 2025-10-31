@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState, useRef, useMemo, useCallback } from "react"
 import { cn } from "@/lib/utils"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 interface AudioPlayerProps {
   track: Track | null
@@ -93,6 +94,7 @@ export function AudioPlayer({
   const [isDragging, setIsDragging] = useState(false)
   const wasPlayingBeforeSeekRef = useRef<boolean>(false)
   const isSeekingRef = useRef<boolean>(false)
+  const isMobile = useIsMobile()
   const playerRef = useRef<HTMLDivElement>(null)
   const volumeSliderRef = useRef<HTMLDivElement>(null)
   const progressSliderRef = useRef<HTMLDivElement>(null)
@@ -239,7 +241,8 @@ export function AudioPlayer({
         }
       }
       // Check if hovering over volume slider for volume control (with larger hitbox)
-      else if (volumeSliderRef.current?.contains(target)) {
+      // Disable on mobile since volume is controlled by device buttons
+      else if (volumeSliderRef.current?.contains(target) && !isMobile) {
         if (scrollControls.enableVolumeControl) {
           e.preventDefault()
           const volumeChange = e.deltaY > 0 ? -0.05 : 0.05
@@ -255,7 +258,7 @@ export function AudioPlayer({
       element.addEventListener("wheel", handleWheel, { passive: false })
       return () => element.removeEventListener("wheel", handleWheel)
     }
-  }, [scrollControls, mode, playerState.currentTime, playerState.duration, playerState.volume, playerState.isPlaying, seek, setVolume, events, handleSeekStart, handleSeekEnd])
+  }, [scrollControls, mode, playerState.currentTime, playerState.duration, playerState.volume, playerState.isPlaying, isMobile, seek, setVolume, events, handleSeekStart, handleSeekEnd])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -412,19 +415,21 @@ export function AudioPlayer({
               <p className="font-medium text-sm truncate">{displayTrack.title}</p>
               <p className="text-xs text-muted-foreground truncate">{displayTrack.artist}</p>
             </div>
-            {/* Volume control in top right */}
+            {/* Volume control in top right - hide slider on mobile (uses device volume) */}
             <div className="flex items-center gap-1.5 shrink-0">
               <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-7 w-7">
                 {playerState.isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
               </Button>
-              <div ref={volumeSliderRef} className="w-16 py-2">
-                <Slider
-                  value={[playerState.isMuted ? 0 : playerState.volume]}
-                  max={1}
-                  step={0.01}
-                  onValueChange={(value) => handleVolumeChange(value[0])}
-                />
-              </div>
+              {!isMobile && (
+                <div ref={volumeSliderRef} className="w-16 py-2">
+                  <Slider
+                    value={[playerState.isMuted ? 0 : playerState.volume]}
+                    max={1}
+                    step={0.01}
+                    onValueChange={(value) => handleVolumeChange(value[0])}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -592,19 +597,21 @@ export function AudioPlayer({
             </div>
             <span className="text-xs text-muted-foreground w-10 shrink-0">{formatTime(playerState.duration)}</span>
 
-            {/* Volume */}
-            <div className="flex items-center gap-2 w-28 shrink-0 ml-2">
+            {/* Volume - hide slider on mobile (uses device volume) */}
+            <div className="flex items-center gap-2 shrink-0 ml-2" style={isMobile ? { width: "auto" } : { width: "7rem" }}>
               <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-8 w-8">
                 {playerState.isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
               </Button>
-              <div ref={volumeSliderRef} className="flex-1 py-2">
-                <Slider
-                  value={[playerState.isMuted ? 0 : playerState.volume]}
-                  max={1}
-                  step={0.01}
-                  onValueChange={(value) => handleVolumeChange(value[0])}
-                />
-              </div>
+              {!isMobile && (
+                <div ref={volumeSliderRef} className="flex-1 py-2">
+                  <Slider
+                    value={[playerState.isMuted ? 0 : playerState.volume]}
+                    max={1}
+                    step={0.01}
+                    onValueChange={(value) => handleVolumeChange(value[0])}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -636,14 +643,23 @@ export function AudioPlayer({
             />
           )}
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-lg md:text-xl truncate">{displayTrack.title}</h3>
-            <p className="text-muted-foreground text-sm md:text-base truncate">{displayTrack.artist}</p>
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <span className="text-xs px-2 py-1 rounded-full bg-secondary text-secondary-foreground">
-                {displayTrack.source.toUpperCase()}
-              </span>
-              {mode === "listener" && (
-                <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary">Listener Mode</span>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold text-lg md:text-xl truncate">{displayTrack.title}</h3>
+                <p className="text-muted-foreground text-sm md:text-base truncate">{displayTrack.artist}</p>
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  <span className="text-xs px-2 py-1 rounded-full bg-secondary text-secondary-foreground">
+                    {displayTrack.source.toUpperCase()}
+                  </span>
+                </div>
+              </div>
+              {/* Volume control on mobile - positioned at top like mini variant */}
+              {isMobile && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-7 w-7">
+                    {playerState.isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
               )}
             </div>
           </div>
@@ -677,21 +693,23 @@ export function AudioPlayer({
 
         {/* Controls */}
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          {/* Volume controls */}
-          <div className="flex items-center gap-2 w-full md:w-auto">
-            <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-9 w-9">
-              {playerState.isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-            </Button>
-            <div ref={volumeSliderRef} className="w-24 md:w-28 py-2">
-              <Slider
-                value={[playerState.isMuted ? 0 : playerState.volume]}
-                max={1}
-                step={0.01}
-                onValueChange={(value) => handleVolumeChange(value[0])}
-                className="w-full"
-              />
+          {/* Volume controls - hide on mobile (positioned at top), show on desktop */}
+          {!isMobile && (
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-9 w-9">
+                {playerState.isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+              </Button>
+              <div ref={volumeSliderRef} className="w-24 md:w-28 py-2">
+                <Slider
+                  value={[playerState.isMuted ? 0 : playerState.volume]}
+                  max={1}
+                  step={0.01}
+                  onValueChange={(value) => handleVolumeChange(value[0])}
+                  className="w-full"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Main playback controls */}
           <div className="flex items-center gap-1 md:gap-2">
