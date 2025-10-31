@@ -290,7 +290,7 @@ export function AudioPlayer({
   }, [mode, playerState.currentTime, playerState.duration, playerState.isPlaying, seek, events, handleSeekStart, handleSeekEnd])
 
   useEffect(() => {
-    if (track && track.id !== currentTrack?.id && track.id !== "placeholder") {
+    if (track && track.url !== currentTrack?.url && track.id !== "placeholder") {
       loadTrack(track)
     }
   }, [track, currentTrack, loadTrack])
@@ -380,19 +380,22 @@ export function AudioPlayer({
   }, [playerState.isBuffering, events])
 
   // Create a placeholder track when no track is provided
-  const displayTrack = track || {
-    id: "placeholder",
-    title: "No track loaded",
-    artist: "Connect to server to load a track",
-    source: "html5" as const,
-    artwork: undefined,
-    url: "",
-  }
+  const displayTrack = useMemo(() => {
+    return track || {
+      id: "placeholder",
+      title: "No track loaded",
+      artist: "Connect to server to load a track",
+      source: "html5" as const,
+      artwork: undefined,
+      url: "",
+    }
+  }, [track])
 
   // Mini player variant
   if (variant === "mini") {
     return (
-      <Card
+      <>
+        <Card
         ref={playerRef}
         tabIndex={0}
         className={cn(
@@ -567,7 +570,7 @@ export function AudioPlayer({
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={toggleRepeat}
+                  onClick={handleToggleRepeat}
                   className={cn(
                     "h-9 w-9 transition-colors",
                     playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
@@ -615,177 +618,180 @@ export function AudioPlayer({
             </div>
           </div>
         </div>
-
-        {/* Hidden iframes for YouTube/SoundCloud */}
+        </Card>
+        {/* Container for audio adapters (rendered once, outside variant conditionals) */}
+        {/* The adapter will create/manage the iframe inside this container */}
         <div className="hidden">
           <div id={containerId} />
-          <iframe id={containerId} title="Audio Player" />
         </div>
-      </Card>
+      </>
     )
   }
 
   // Full player variant
   return (
-    <Card
-      ref={playerRef}
-      tabIndex={0}
-      className={cn("w-full max-w-2xl mx-auto focus:outline-none focus:ring-2 focus:ring-primary/20", className)}
-    >
-      <div className="p-4 md:p-6 space-y-4 md:space-y-6">
-        {/* Track artwork and info */}
-        <div className="flex items-center gap-3 md:gap-4">
-          {displayTrack.artwork && (
-            <img
-              src={displayTrack.artwork || "/placeholder.svg"}
-              alt={displayTrack.title}
-              className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shadow-lg shrink-0"
-            />
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-lg md:text-xl truncate">{displayTrack.title}</h3>
-                <p className="text-muted-foreground text-sm md:text-base truncate">{displayTrack.artist}</p>
-                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className="text-xs px-2 py-1 rounded-full bg-secondary text-secondary-foreground">
-                    {displayTrack.source.toUpperCase()}
-                  </span>
+    <>
+      <Card
+        ref={playerRef}
+        tabIndex={0}
+        className={cn("w-full max-w-2xl mx-auto focus:outline-none focus:ring-2 focus:ring-primary/20", className)}
+      >
+        <div className="p-4 md:p-6 space-y-4 md:space-y-6">
+          {/* Track artwork and info */}
+          <div className="flex items-center gap-3 md:gap-4">
+            {displayTrack.artwork && (
+              <img
+                src={displayTrack.artwork || "/placeholder.svg"}
+                alt={displayTrack.title}
+                className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shadow-lg shrink-0"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-lg md:text-xl truncate">{displayTrack.title}</h3>
+                  <p className="text-muted-foreground text-sm md:text-base truncate">{displayTrack.artist}</p>
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    <span className="text-xs px-2 py-1 rounded-full bg-secondary text-secondary-foreground">
+                      {displayTrack.source.toUpperCase()}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              {/* Volume control on mobile - positioned at top like mini variant */}
-              {isMobile && (
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-7 w-7">
-                    {playerState.isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-                  </Button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Progress bar */}
-        <div className="space-y-2">
-          <div ref={progressSliderRef} className="py-2">
-            <Slider
-              value={[playerState.currentTime]}
-              max={playerState.duration || 100}
-              step={0.1}
-              onValueChange={handleSeek}
-              onPointerDown={() => {
-                setIsDragging(true)
-                handleSeekStart()
-              }}
-              onPointerUp={() => {
-                setIsDragging(false)
-                handleSeekEnd()
-              }}
-              disabled={mode === "listener"}
-              className={cn("w-full", mode === "listener" && "opacity-50 cursor-not-allowed")}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>{formatTime(playerState.currentTime)}</span>
-            <span>{formatTime(playerState.duration)}</span>
-          </div>
-        </div>
-
-        {/* Controls */}
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          {/* Volume controls - hide on mobile (positioned at top), show on desktop */}
-          {!isMobile && (
-            <div className="flex items-center gap-2 w-full md:w-auto">
-              <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-9 w-9">
-                {playerState.isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-              </Button>
-              <div ref={volumeSliderRef} className="w-24 md:w-28 py-2">
-                <Slider
-                  value={[playerState.isMuted ? 0 : playerState.volume]}
-                  max={1}
-                  step={0.01}
-                  onValueChange={(value) => handleVolumeChange(value[0])}
-                  className="w-full"
-                />
+                {/* Volume control on mobile - positioned at top like mini variant */}
+                {isMobile && (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-7 w-7">
+                      {playerState.isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
-          )}
-
-          {/* Main playback controls */}
-          <div className="flex items-center gap-1 md:gap-2">
-            {mode === "host" && (
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={handleToggleShuffle}
-                className={cn(
-                  "h-9 w-9 transition-colors",
-                  playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-                )}
-              >
-                <Shuffle className="h-4 w-4" />
-              </Button>
-            )}
-
-            {onPrevious && mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={onPrevious} className="h-9 w-9">
-                <SkipBack className="h-4 w-4" />
-              </Button>
-            )}
-
-            {mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={() => handleSkipBy(-5)} className="h-9 w-9">
-                <Undo2 className="h-4 w-4" />
-              </Button>
-            )}
-
-            <Button size="icon" className="h-12 w-12" onClick={handlePlayPause} disabled={playerState.isBuffering}>
-              {playerState.isBuffering ? (
-                <div className="h-5 w-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-              ) : playerState.isPlaying ? (
-                <Pause className="h-6 w-6" />
-              ) : (
-                <Play className="h-6 w-6" />
-              )}
-            </Button>
-
-            {mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={() => handleSkipBy(5)} className="h-9 w-9">
-                <Redo2 className="h-4 w-4" />
-              </Button>
-            )}
-
-            {onNext && mode === "host" && (
-              <Button size="icon" variant="ghost" onClick={onNext} className="h-9 w-9">
-                <SkipForward className="h-4 w-4" />
-              </Button>
-            )}
-
-            {mode === "host" && (
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={handleToggleRepeat}
-                className={cn(
-                  "h-9 w-9 transition-colors",
-                  playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-                )}
-              >
-                {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
-              </Button>
-            )}
           </div>
 
-          {/* Spacer for layout balance on desktop */}
-          <div className="hidden md:block w-28" />
-        </div>
-      </div>
+          {/* Progress bar */}
+          <div className="space-y-2">
+            <div ref={progressSliderRef} className="py-2">
+              <Slider
+                value={[playerState.currentTime]}
+                max={playerState.duration || 100}
+                step={0.1}
+                onValueChange={handleSeek}
+                onPointerDown={() => {
+                  setIsDragging(true)
+                  handleSeekStart()
+                }}
+                onPointerUp={() => {
+                  setIsDragging(false)
+                  handleSeekEnd()
+                }}
+                disabled={mode === "listener"}
+                className={cn("w-full", mode === "listener" && "opacity-50 cursor-not-allowed")}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{formatTime(playerState.currentTime)}</span>
+              <span>{formatTime(playerState.duration)}</span>
+            </div>
+          </div>
 
-      {/* Hidden iframes for YouTube/SoundCloud */}
+          {/* Controls */}
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            {/* Volume controls - hide on mobile (positioned at top), show on desktop */}
+            {!isMobile && (
+              <div className="flex items-center gap-2 w-full md:w-auto">
+                <Button size="icon" variant="ghost" onClick={handleToggleMute} className="h-9 w-9">
+                  {playerState.isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                </Button>
+                <div ref={volumeSliderRef} className="w-24 md:w-28 py-2">
+                  <Slider
+                    value={[playerState.isMuted ? 0 : playerState.volume]}
+                    max={1}
+                    step={0.01}
+                    onValueChange={(value) => handleVolumeChange(value[0])}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Main playback controls */}
+            <div className="flex items-center gap-1 md:gap-2">
+              {mode === "host" && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={handleToggleShuffle}
+                  className={cn(
+                    "h-9 w-9 transition-colors",
+                    playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
+                  )}
+                >
+                  <Shuffle className="h-4 w-4" />
+                </Button>
+              )}
+
+              {onPrevious && mode === "host" && (
+                <Button size="icon" variant="ghost" onClick={onPrevious} className="h-9 w-9">
+                  <SkipBack className="h-4 w-4" />
+                </Button>
+              )}
+
+              {mode === "host" && (
+                <Button size="icon" variant="ghost" onClick={() => handleSkipBy(-5)} className="h-9 w-9">
+                  <Undo2 className="h-4 w-4" />
+                </Button>
+              )}
+
+              <Button size="icon" className="h-12 w-12" onClick={handlePlayPause} disabled={playerState.isBuffering}>
+                {playerState.isBuffering ? (
+                  <div className="h-5 w-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                ) : playerState.isPlaying ? (
+                  <Pause className="h-6 w-6" />
+                ) : (
+                  <Play className="h-6 w-6" />
+                )}
+              </Button>
+
+              {mode === "host" && (
+                <Button size="icon" variant="ghost" onClick={() => handleSkipBy(5)} className="h-9 w-9">
+                  <Redo2 className="h-4 w-4" />
+                </Button>
+              )}
+
+              {onNext && mode === "host" && (
+                <Button size="icon" variant="ghost" onClick={onNext} className="h-9 w-9">
+                  <SkipForward className="h-4 w-4" />
+                </Button>
+              )}
+
+              {mode === "host" && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={handleToggleRepeat}
+                  className={cn(
+                    "h-9 w-9 transition-colors",
+                    playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
+                  )}
+                >
+                  {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                </Button>
+              )}
+            </div>
+
+            {/* Spacer for layout balance on desktop */}
+            <div className="hidden md:block w-28" />
+          </div>
+        </div>
+      </Card>
+      {/* Container for audio adapters (rendered once, outside variant conditionals) */}
+      {/* The adapter will create/manage the iframe inside this container */}
       <div className="hidden">
         <div id={containerId} />
-        <iframe id={containerId} title="Audio Player" />
       </div>
-    </Card>
+    </>
   )
+
+
 }

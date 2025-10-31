@@ -3,6 +3,7 @@ import { AudioPlayer, type PlayerControls } from "./components/audio-player";
 import type { Track } from "./types/audio-player";
 import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
+import { Input } from "./components/ui/input";
 
 function Home() {
     const [track, setTrack] = useState<Track | null>(null);
@@ -11,11 +12,22 @@ function Home() {
     const [variant, setVariant] = useState<"full" | "mini">("full");
     const ws = useRef<WebSocket | null>(null);
 
+    const [trackUrl, setTrackUrl] = useState<string>("");
+    const [trackMode, setTrackMode] = useState<"html5" | "youtube">("html5");
+    const trackModeRef = useRef<"html5" | "youtube">("html5");
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        trackModeRef.current = trackMode;
+    }, [trackMode]);
+
     const connectToServer = () => {
         ws.current = new WebSocket("ws://192.168.1.2:8000/ws");
         ws.current.onmessage = (event) => {
             const data = JSON.parse(event.data);
             console.log("received", data);
+            // Use ref to get the latest trackMode value
+            const currentTrackMode = trackModeRef.current;
             if (data.type === "state_sync") {
                 setTrack((prev: Track | null) => {
                     if (!data.payload.track) return prev;
@@ -23,7 +35,7 @@ function Home() {
                         id: "1",
                         title: "My Song",
                         artist: "Artist Name",
-                        source: "html5",
+                        source: currentTrackMode,
                         artwork: "https://picsum.photos/1500",
                         url: data.payload.track,
                     } as Track;
@@ -60,6 +72,25 @@ function Home() {
                 } else {
                     controls?.pause();
                 }
+            } else if (data.type === "set_track") {
+                setTrack(() => {
+                    return {
+                        id: "1",
+                        title: "New Song",
+                        artist: "New Artist",
+                        source: currentTrackMode,
+                        artwork: "https://picsum.photos/1500",
+                        url: data.payload.track,
+                    } as Track;
+                });
+                console.log({
+                    id: "1",
+                    title: "New Song",
+                    artist: "New Artist",
+                    source: currentTrackMode,
+                    artwork: "https://picsum.photos/1500",
+                    url: data.payload.track,
+                })
             }
         };
 
@@ -176,6 +207,21 @@ function Home() {
                 ws.current?.send(JSON.stringify(data));
                 console.log("sent", data);
             }} className="m-2">Sync</Button>
+
+            <Input type="text" placeholder="Track URL" value={trackUrl} onChange={(e) => setTrackUrl(e.target.value)} />
+            <Button onClick={() => {
+                const data = {
+                    type: "set_track",
+                    payload: {
+                        track: trackUrl,
+                    },
+                };
+                ws.current?.send(JSON.stringify(data));
+                console.log("sent", data);
+            }} className="m-2">Set Track</Button>
+            <Button onClick={() => {
+                setTrackMode((prev) => prev === "html5" ? "youtube" : "html5");
+            }} className="m-2">Track Mode: {trackMode}</Button>
         </div>
     );
 }
