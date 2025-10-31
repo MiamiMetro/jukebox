@@ -12,7 +12,7 @@ function Home() {
     const ws = useRef<WebSocket | null>(null);
 
     const connectToServer = () => {
-        ws.current = new WebSocket("ws://localhost:8000/ws");
+        ws.current = new WebSocket("ws://192.168.1.2:8000/ws");
         ws.current.onmessage = (event) => {
             const data = JSON.parse(event.data);
             console.log("received", data);

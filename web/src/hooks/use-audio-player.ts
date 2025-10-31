@@ -29,6 +29,46 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const adapterRef = useRef<AudioPlayerAdapter | null>(null)
   const containerIdRef = useRef<string>(`player-${Math.random().toString(36).substr(2, 9)}`)
 
+  // Update Media Session metadata
+  const updateMediaSession = useCallback((track: Track | null, isPlaying: boolean) => {
+    if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
+      if (track) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title,
+          artist: track.artist,
+          album: "",
+          artwork: track.artwork
+            ? [
+                {
+                  src: track.artwork,
+                  sizes: "512x512",
+                  type: "image/png",
+                },
+              ]
+            : [],
+        })
+      }
+
+      // Media Session action handlers are set up in component to trigger events
+
+      // Update playback state
+      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused"
+    }
+  }, [mode])
+
+  // Update Media Session position state
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && "mediaSession" in navigator && currentTrack && adapterRef.current) {
+      if ("setPositionState" in navigator.mediaSession) {
+        navigator.mediaSession.setPositionState({
+          duration: playerState.duration || 0,
+          playbackRate: 1.0,
+          position: playerState.currentTime,
+        })
+      }
+    }
+  }, [currentTrack, playerState.currentTime, playerState.duration])
+
   // Load track
   const loadTrack = useCallback(
     async (track: Track) => {
@@ -94,8 +134,11 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (playerState.isPlaying) {
         await adapter.play()
       }
+
+      // Update Media Session metadata
+      updateMediaSession(track, playerState.isPlaying)
     },
-    [mode, onTimeSync, onTrackEnd, playerState.isPlaying],
+    [mode, onTimeSync, onTrackEnd, playerState.isPlaying, updateMediaSession],
   )
 
   // Play
@@ -105,8 +148,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (mode === "listener") {
         setPlayerState((prev) => ({ ...prev, isLive: true }))
       }
+      // Update Media Session
+      updateMediaSession(currentTrack, true)
     }
-  }, [mode])
+  }, [mode, currentTrack, updateMediaSession])
 
   // Pause
   const pause = useCallback(() => {
@@ -115,8 +160,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (mode === "listener") {
         setPlayerState((prev) => ({ ...prev, isLive: false }))
       }
+      // Update Media Session
+      updateMediaSession(currentTrack, false)
     }
-  }, [mode])
+  }, [mode, currentTrack, updateMediaSession])
 
   // Programmatic seek: always allowed; UI gating handled in component
   const seek = useCallback(
@@ -210,6 +257,11 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       }
     }
   }, [])
+
+  // Update Media Session when track or playing state changes
+  useEffect(() => {
+    updateMediaSession(currentTrack, playerState.isPlaying)
+  }, [currentTrack, playerState.isPlaying, updateMediaSession])
 
   // On mount, hydrate initial volume/mute from localStorage
   useEffect(() => {

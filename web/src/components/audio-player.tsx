@@ -133,6 +133,55 @@ export function AudioPlayer({
     }
   }, [onPlayerReady, controls])
 
+  // Set up Media Session action handlers to trigger events
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
+      navigator.mediaSession.setActionHandler("play", async () => {
+        await play()
+        events?.onPlay?.()
+      })
+
+      navigator.mediaSession.setActionHandler("pause", () => {
+        pause()
+        events?.onPause?.()
+      })
+
+      navigator.mediaSession.setActionHandler("seekbackward", (details) => {
+        if (mode === "host") {
+          const skipTime = details.seekOffset || 10
+          const newTime = Math.max(0, playerState.currentTime - skipTime)
+          seek(newTime)
+          events?.onSeek?.(newTime)
+        }
+      })
+
+      navigator.mediaSession.setActionHandler("seekforward", (details) => {
+        if (mode === "host") {
+          const skipTime = details.seekOffset || 10
+          const newTime = Math.min(playerState.duration || 0, playerState.currentTime + skipTime)
+          seek(newTime)
+          events?.onSeek?.(newTime)
+        }
+      })
+
+      if (onPrevious) {
+        navigator.mediaSession.setActionHandler("previoustrack", () => {
+          if (mode === "host") {
+            onPrevious()
+          }
+        })
+      }
+
+      if (onNext) {
+        navigator.mediaSession.setActionHandler("nexttrack", () => {
+          if (mode === "host") {
+            onNext()
+          }
+        })
+      }
+    }
+  }, [play, pause, seek, events, mode, playerState.currentTime, playerState.duration, onPrevious, onNext])
+
   useEffect(() => {
     const handleWheel = (e: WheelEvent) => {
       const target = e.target as Node
