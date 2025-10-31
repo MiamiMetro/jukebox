@@ -86,7 +86,7 @@ async def ws_endpoint(ws: WebSocket):
                     state["start_time"] = now - new_pos
                 await broadcast({
                     "type": "seek",
-                    "payload": {"position": new_pos},
+                    "payload": {"position": new_pos, "is_playing": state["is_playing"]},
                     "server_time": now
                 })
 
@@ -109,6 +109,7 @@ async def ws_endpoint(ws: WebSocket):
 
             elif t == "get_state":
                 # Send current state to requesting client
+                state["position"] = time.time() - state["start_time"]
                 await ws.send_text(json.dumps({
                     "type": "state_sync",
                     "payload": state,

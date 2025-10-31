@@ -1,7 +1,7 @@
 "use client"
 
 import { useAudioPlayer } from "@/hooks/use-audio-player"
-import type { Track, PlayerMode, PlayerVariant, ScrollControlOptions } from "@/types/audio-player"
+import type { Track, PlayerMode, PlayerVariant, ScrollControlOptions, PlayerState } from "@/types/audio-player"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Card } from "@/components/ui/card"
@@ -57,7 +57,7 @@ export interface PlayerControls {
   toggleMute: () => void
   toggleShuffle: () => void
   toggleRepeat: () => void
-  getState: () => any
+  getState: () => PlayerState
 }
 
 export function AudioPlayer({
@@ -189,7 +189,7 @@ export function AudioPlayer({
   }, [mode, playerState.currentTime, playerState.duration, seek, events])
 
   useEffect(() => {
-    if (track && track.id !== currentTrack?.id) {
+    if (track && track.id !== currentTrack?.id && track.id !== "placeholder") {
       loadTrack(track)
     }
   }, [track, currentTrack, loadTrack])
@@ -264,8 +264,14 @@ export function AudioPlayer({
     events?.onBufferingChange?.(playerState.isBuffering)
   }, [playerState.isBuffering, events])
 
-  if (!track) {
-    return null
+  // Create a placeholder track when no track is provided
+  const displayTrack = track || {
+    id: "placeholder",
+    title: "No track loaded",
+    artist: "Connect to server to load a track",
+    source: "html5" as const,
+    artwork: undefined,
+    url: "",
   }
 
   // Mini player variant
@@ -283,16 +289,16 @@ export function AudioPlayer({
         <div className="flex flex-col gap-1.5 p-2 md:hidden">
           {/* Track name and volume at top */}
           <div className="flex items-center gap-2 min-w-0">
-            {track.artwork && (
+            {displayTrack.artwork && (
               <img
-                src={track.artwork || "/placeholder.svg"}
-                alt={track.title}
+                src={displayTrack.artwork || "/placeholder.svg"}
+                alt={displayTrack.title}
                 className="h-9 w-9 rounded object-cover shrink-0"
               />
             )}
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-sm truncate">{track.title}</p>
-              <p className="text-xs text-muted-foreground truncate">{track.artist}</p>
+              <p className="font-medium text-sm truncate">{displayTrack.title}</p>
+              <p className="text-xs text-muted-foreground truncate">{displayTrack.artist}</p>
             </div>
             {/* Volume control in top right */}
             <div className="flex items-center gap-1.5 shrink-0">
@@ -329,18 +335,20 @@ export function AudioPlayer({
 
           {/* Controls row */}
           <div className="flex items-center gap-0 justify-center">
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={handleToggleShuffle}
-              className={cn(
-                "h-8 w-8 transition-colors",
-                playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-              )}
-            >
-              <Shuffle className="h-3.5 w-3.5" />
-            </Button>
-            {onPrevious && (
+            {mode === "host" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={handleToggleShuffle}
+                className={cn(
+                  "h-8 w-8 transition-colors",
+                  playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
+                )}
+              >
+                <Shuffle className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {onPrevious && mode === "host" && (
               <Button size="icon" variant="ghost" onClick={onPrevious} className="h-8 w-8">
                 <SkipBack className="h-3.5 w-3.5" />
               </Button>
@@ -358,22 +366,24 @@ export function AudioPlayer({
                 <Redo2 className="h-3.5 w-3.5" />
               </Button>
             )}
-            {onNext && (
+            {onNext && mode === "host" && (
               <Button size="icon" variant="ghost" onClick={onNext} className="h-8 w-8">
                 <SkipForward className="h-3.5 w-3.5" />
               </Button>
             )}
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={handleToggleRepeat}
-              className={cn(
-                "h-8 w-8 transition-colors",
-                playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-              )}
-            >
-              {playerState.repeat === "one" ? <Repeat1 className="h-3.5 w-3.5" /> : <Repeat className="h-3.5 w-3.5" />}
-            </Button>
+            {mode === "host" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={handleToggleRepeat}
+                className={cn(
+                  "h-8 w-8 transition-colors",
+                  playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
+                )}
+              >
+                {playerState.repeat === "one" ? <Repeat1 className="h-3.5 w-3.5" /> : <Repeat className="h-3.5 w-3.5" />}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -383,33 +393,35 @@ export function AudioPlayer({
           <div className="flex items-center gap-3">
             {/* Track info */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
-              {track.artwork && (
+              {displayTrack.artwork && (
                 <img
-                  src={track.artwork || "/placeholder.svg"}
-                  alt={track.title}
+                  src={displayTrack.artwork || "/placeholder.svg"}
+                  alt={displayTrack.title}
                   className="h-14 w-14 rounded object-cover shrink-0"
                 />
               )}
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-base truncate">{track.title}</p>
-                <p className="text-xs text-muted-foreground truncate">{track.artist}</p>
+                <p className="font-medium text-base truncate">{displayTrack.title}</p>
+                <p className="text-xs text-muted-foreground truncate">{displayTrack.artist}</p>
               </div>
             </div>
 
             {/* Desktop controls */}
             <div className="flex items-center gap-1 shrink-0">
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={handleToggleShuffle}
-                className={cn(
-                  "h-9 w-9 transition-colors",
-                  playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-                )}
-              >
-                <Shuffle className="h-4 w-4" />
-              </Button>
-              {onPrevious && (
+              {mode === "host" && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={handleToggleShuffle}
+                  className={cn(
+                    "h-9 w-9 transition-colors",
+                    playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
+                  )}
+                >
+                  <Shuffle className="h-4 w-4" />
+                </Button>
+              )}
+              {onPrevious && mode === "host" && (
                 <Button size="icon" variant="ghost" onClick={onPrevious} className="h-9 w-9">
                   <SkipBack className="h-4 w-4" />
                 </Button>
@@ -427,22 +439,24 @@ export function AudioPlayer({
                   <Redo2 className="h-4 w-4" />
                 </Button>
               )}
-              {onNext && (
+              {onNext && mode === "host" && (
                 <Button size="icon" variant="ghost" onClick={onNext} className="h-9 w-9">
                   <SkipForward className="h-4 w-4" />
                 </Button>
               )}
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={toggleRepeat}
-                className={cn(
-                  "h-9 w-9 transition-colors",
-                  playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-                )}
-              >
-                {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
-              </Button>
+              {mode === "host" && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={toggleRepeat}
+                  className={cn(
+                    "h-9 w-9 transition-colors",
+                    playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
+                  )}
+                >
+                  {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                </Button>
+              )}
             </div>
           </div>
 
@@ -498,19 +512,19 @@ export function AudioPlayer({
       <div className="p-4 md:p-6 space-y-4 md:space-y-6">
         {/* Track artwork and info */}
         <div className="flex items-center gap-3 md:gap-4">
-          {track.artwork && (
+          {displayTrack.artwork && (
             <img
-              src={track.artwork || "/placeholder.svg"}
-              alt={track.title}
+              src={displayTrack.artwork || "/placeholder.svg"}
+              alt={displayTrack.title}
               className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shadow-lg shrink-0"
             />
           )}
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-lg md:text-xl truncate">{track.title}</h3>
-            <p className="text-muted-foreground text-sm md:text-base truncate">{track.artist}</p>
+            <h3 className="font-semibold text-lg md:text-xl truncate">{displayTrack.title}</h3>
+            <p className="text-muted-foreground text-sm md:text-base truncate">{displayTrack.artist}</p>
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span className="text-xs px-2 py-1 rounded-full bg-secondary text-secondary-foreground">
-                {track.source.toUpperCase()}
+                {displayTrack.source.toUpperCase()}
               </span>
               {mode === "listener" && (
                 <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary">Listener Mode</span>
@@ -559,19 +573,21 @@ export function AudioPlayer({
 
           {/* Main playback controls */}
           <div className="flex items-center gap-1 md:gap-2">
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={handleToggleShuffle}
-              className={cn(
-                "h-9 w-9 transition-colors",
-                playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-              )}
-            >
-              <Shuffle className="h-4 w-4" />
-            </Button>
+            {mode === "host" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={handleToggleShuffle}
+                className={cn(
+                  "h-9 w-9 transition-colors",
+                  playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
+                )}
+              >
+                <Shuffle className="h-4 w-4" />
+              </Button>
+            )}
 
-            {onPrevious && (
+            {onPrevious && mode === "host" && (
               <Button size="icon" variant="ghost" onClick={onPrevious} className="h-9 w-9">
                 <SkipBack className="h-4 w-4" />
               </Button>
@@ -599,23 +615,25 @@ export function AudioPlayer({
               </Button>
             )}
 
-            {onNext && (
+            {onNext && mode === "host" && (
               <Button size="icon" variant="ghost" onClick={onNext} className="h-9 w-9">
                 <SkipForward className="h-4 w-4" />
               </Button>
             )}
 
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={handleToggleRepeat}
-              className={cn(
-                "h-9 w-9 transition-colors",
-                playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-              )}
-            >
-              {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
-            </Button>
+            {mode === "host" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={handleToggleRepeat}
+                className={cn(
+                  "h-9 w-9 transition-colors",
+                  playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
+                )}
+              >
+                {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+              </Button>
+            )}
           </div>
 
           {/* Spacer for layout balance on desktop */}

@@ -15,9 +15,8 @@ function Home() {
         ws.current = new WebSocket("ws://localhost:8000/ws");
         ws.current.onmessage = (event) => {
             const data = JSON.parse(event.data);
+            console.log("received", data);
             if (data.type === "state_sync") {
-                console.log("state_sync", data);
-
                 setTrack((prev: Track | null) => {
                     if (!data.payload.track) return prev;
                     return {
@@ -30,10 +29,37 @@ function Home() {
                     } as Track;
                 });
 
-                const state = data.payload;
+
+                controls?.seek(data.payload.position);
+                console.log("seeked", data.payload.position);
+                if (data.payload.is_playing === true) {
+                    const serverTime = data.server_time;
+                    const currentPos = serverTime - data.payload.start_time;
+                    controls?.seek(Math.max(0, currentPos));
+                    controls?.play();
+                }
+            } else if (data.payload && data.payload.start_time) {
                 const serverTime = data.server_time;
-                const currentPos = serverTime - state.start_time;
+                const currentPos = serverTime - data.payload.start_time;
+
                 controls?.seek(Math.max(0, currentPos));
+                controls?.play();
+            } else if (data.type === "pause") {
+                // audioPlayer.currentTime = data.payload.position;
+                // audioPlayer.pause();
+                controls?.seek(data.payload.position);
+                controls?.pause();
+            } else if (data.type === "seek") {
+                const state = controls?.getState();
+                const wasPlaying = state?.isPlaying;
+                controls?.seek(data.payload.position);
+                if (data.payload.is_playing === true) {
+                    if (!wasPlaying) {
+                        controls?.play();
+                    }
+                } else {
+                    controls?.pause();
+                }
             }
         };
 
@@ -66,7 +92,6 @@ function Home() {
         };
     }, [controls]);
 
-
     return (
         <div className="p-4">
             <h2 className="text-2xl font-semibold">Home</h2>
@@ -80,12 +105,6 @@ function Home() {
                 onPlayerReady={(playerControls) => setControls(playerControls)}
                 events={{
                     onPlay: () => {
-                        const data = {
-                            type: "get_state",
-                        };
-                        ws.current?.send(JSON.stringify(data));
-                        console.log("sent", data);
-                        
                         if (mode === "host") {
                             const data = {
                                 type: "play",
@@ -93,13 +112,21 @@ function Home() {
                             ws.current?.send(JSON.stringify(data));
                             console.log("sent", data);
                         }
-                    },
-                    onPause: () => {
+
                         const data = {
-                            type: "pause",
+                            type: "get_state",
                         };
                         ws.current?.send(JSON.stringify(data));
                         console.log("sent", data);
+                    },
+                    onPause: () => {
+                        if (mode === "host") {
+                            const data = {
+                                type: "pause",
+                            };
+                            ws.current?.send(JSON.stringify(data));
+                            console.log("sent", data);
+                        }
                     },
                     onSeek: (time: number) => {
                         const data = {
@@ -114,7 +141,7 @@ function Home() {
                 }}
             />
 
-
+            {/* Debug buttons */}
             <Button onClick={() => {
                 const state = controls?.getState();
                 console.log("state", state);

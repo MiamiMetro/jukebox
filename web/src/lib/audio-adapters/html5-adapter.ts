@@ -61,7 +61,9 @@ export class HTML5AudioAdapter implements AudioPlayerAdapter {
   }
 
   seek(time: number): void {
-    this.audio.currentTime = time
+    if (Number.isFinite(time) && time >= 0) {
+      this.audio.currentTime = time
+    }
   }
 
   setVolume(volume: number): void {
