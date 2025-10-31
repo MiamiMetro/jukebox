@@ -187,6 +187,21 @@ function About() {
             <p className="mt-2">
                 This is a small demo of React Router + React Query.
             </p>
+
+            <AudioPlayer
+                track={{
+                    id: "1",
+                    title: "My Song",
+                    artist: "Artist Name",
+                    source: "youtube",
+                    artwork: "https://picsum.photos/1500",
+                    url: "https://www.youtube.com/watch?v=HQf8eMu3zP0",
+                }}
+                mode="host"
+                variant="full"
+                onNext={() => console.log("Next track")}
+                onPrevious={() => console.log("Previous track")}
+            />
         </div>
     );
 }

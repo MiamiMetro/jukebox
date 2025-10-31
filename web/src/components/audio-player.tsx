@@ -174,7 +174,9 @@ export function AudioPlayer({
       navigator.mediaSession.setActionHandler("seekbackward", (details) => {
         if (mode === "host") {
           const skipTime = details.seekOffset || 10
-          const newTime = Math.max(0, playerState.currentTime - skipTime)
+          // Get current time from adapter for accurate seeking (works for both HTML5 and YouTube)
+          const currentTime = controls.getState().currentTime
+          const newTime = Math.max(0, currentTime - skipTime)
           seek(newTime)
           events?.onSeek?.(newTime)
         }
@@ -183,7 +185,10 @@ export function AudioPlayer({
       navigator.mediaSession.setActionHandler("seekforward", (details) => {
         if (mode === "host") {
           const skipTime = details.seekOffset || 10
-          const newTime = Math.min(playerState.duration || 0, playerState.currentTime + skipTime)
+          // Get current time from adapter for accurate seeking (works for both HTML5 and YouTube)
+          const currentTime = controls.getState().currentTime
+          const duration = controls.getState().duration
+          const newTime = Math.min(duration || 0, currentTime + skipTime)
           seek(newTime)
           events?.onSeek?.(newTime)
         }

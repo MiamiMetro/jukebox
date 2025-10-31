@@ -16,7 +16,7 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
   private playCallback?: () => void
   private pauseCallback?: () => void
   private bufferingCallback?: (isBuffering: boolean) => void
-  private timeUpdateInterval?: NodeJS.Timeout
+  private timeUpdateInterval?: ReturnType<typeof setInterval>
   private isReady = false
 
   constructor(containerId = "youtube-player") {
@@ -59,15 +59,39 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
         return
       }
 
+      // Ensure container exists and is visible (required for iOS Safari)
+      let container = document.getElementById(this.containerId)
+      if (!container) {
+        container = document.createElement("div")
+        container.id = this.containerId
+        const containerEl = container as HTMLElement
+        containerEl.style.position = "fixed"
+        containerEl.style.top = "-1000px"
+        containerEl.style.left = "-1000px"
+        containerEl.style.width = "1px"
+        containerEl.style.height = "1px"
+        containerEl.style.opacity = "0"
+        containerEl.style.pointerEvents = "none"
+        containerEl.style.display = "block"
+        document.body.appendChild(container)
+      } else {
+        // Ensure existing container is not hidden
+        const containerEl = container as HTMLElement
+        if (containerEl.style.display === "none") {
+          containerEl.style.display = "block"
+        }
+      }
+
       this.player = new window.YT.Player(this.containerId, {
-        height: "0",
-        width: "0",
+        height: "1",
+        width: "1",
         videoId: videoId,
         playerVars: {
           controls: 0,
           disablekb: 1,
           fs: 0,
           modestbranding: 1,
+          playsinline: 1, // Required for iOS Safari
         },
         events: {
           onReady: () => {
@@ -77,15 +101,22 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
             resolve()
           },
           onStateChange: (event: any) => {
-            if (event.data === window.YT.PlayerState.PLAYING) {
+            const state = event.data
+            console.log("YouTube state change:", state)
+            if (state === window.YT.PlayerState.PLAYING) {
               this.playCallback?.()
               this.bufferingCallback?.(false)
-            } else if (event.data === window.YT.PlayerState.PAUSED) {
+            } else if (state === window.YT.PlayerState.PAUSED) {
               this.pauseCallback?.()
-            } else if (event.data === window.YT.PlayerState.ENDED) {
+              this.bufferingCallback?.(false)
+            } else if (state === window.YT.PlayerState.ENDED) {
               this.endedCallback?.()
-            } else if (event.data === window.YT.PlayerState.BUFFERING) {
+              this.bufferingCallback?.(false)
+            } else if (state === window.YT.PlayerState.BUFFERING) {
               this.bufferingCallback?.(true)
+            } else if (state === window.YT.PlayerState.CUED) {
+              // Video is cued and ready to play - clear buffering
+              this.bufferingCallback?.(false)
             }
           },
         },
@@ -106,7 +137,28 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
 
   async play(): Promise<void> {
     if (this.player && this.isReady) {
-      this.player.playVideo()
+      try {
+        this.player.playVideo()
+        // On iOS, sometimes the player gets stuck in buffering state
+        // Check state after a short delay and clear buffering if actually playing
+        setTimeout(() => {
+          if (this.player && this.isReady) {
+            const state = this.player.getPlayerState?.()
+            // If playing or paused (not buffering), clear buffering state
+            if (state === window.YT.PlayerState.PLAYING || state === window.YT.PlayerState.PAUSED) {
+              this.bufferingCallback?.(false)
+            }
+          }
+        }, 500)
+        // Fallback: clear buffering after 3 seconds regardless
+        setTimeout(() => {
+          this.bufferingCallback?.(false)
+        }, 3000)
+      } catch (error) {
+        console.error("YouTube play error:", error)
+        this.bufferingCallback?.(false)
+        throw error
+      }
     }
   }
 
