@@ -18,7 +18,7 @@ import {
   Undo2,
   Redo2,
 } from "lucide-react"
-import { useEffect, useState, useRef, useMemo } from "react"
+import { useEffect, useState, useRef, useMemo, useCallback } from "react"
 import { cn } from "@/lib/utils"
 
 interface AudioPlayerProps {
@@ -91,6 +91,8 @@ export function AudioPlayer({
   } = useAudioPlayer({ mode, onTrackEnd, onTimeSync })
 
   const [isDragging, setIsDragging] = useState(false)
+  const wasPlayingBeforeSeekRef = useRef<boolean>(false)
+  const isSeekingRef = useRef<boolean>(false)
   const playerRef = useRef<HTMLDivElement>(null)
   const volumeSliderRef = useRef<HTMLDivElement>(null)
   const progressSliderRef = useRef<HTMLDivElement>(null)
@@ -132,6 +134,29 @@ export function AudioPlayer({
       onPlayerReady(controls)
     }
   }, [onPlayerReady, controls])
+
+  const handleSeekStart = useCallback(() => {
+    if (mode === "host" && playerState.isPlaying) {
+      wasPlayingBeforeSeekRef.current = true
+      isSeekingRef.current = true
+      pause()
+      events?.onPause?.()
+    } else {
+      wasPlayingBeforeSeekRef.current = false
+      isSeekingRef.current = true
+    }
+  }, [mode, playerState.isPlaying, pause, events])
+
+  const handleSeekEnd = useCallback(() => {
+    if (mode === "host" && wasPlayingBeforeSeekRef.current) {
+      isSeekingRef.current = false
+      play()
+      events?.onPlay?.()
+    } else {
+      isSeekingRef.current = false
+    }
+    wasPlayingBeforeSeekRef.current = false
+  }, [mode, play, events])
 
   // Set up Media Session action handlers to trigger events
   useEffect(() => {
@@ -190,10 +215,22 @@ export function AudioPlayer({
       if (progressSliderRef.current?.contains(target)) {
         if (scrollControls.enableTrackControl && mode === "host") {
           e.preventDefault()
+          const wasPlaying = playerState.isPlaying
+          if (wasPlaying && !isSeekingRef.current) {
+            handleSeekStart()
+          }
           const seekAmount = e.deltaY > 0 ? -5 : 5
           const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + seekAmount))
           seek(newTime)
           events?.onSeek?.(newTime)
+          // Small delay to resume if it was playing (for smooth scroll seeking)
+          if (wasPlaying) {
+            setTimeout(() => {
+              if (isSeekingRef.current) {
+                handleSeekEnd()
+              }
+            }, 300)
+          }
         }
       }
       // Check if hovering over volume slider for volume control (with larger hitbox)
@@ -213,29 +250,36 @@ export function AudioPlayer({
       element.addEventListener("wheel", handleWheel, { passive: false })
       return () => element.removeEventListener("wheel", handleWheel)
     }
-  }, [scrollControls, mode, playerState.currentTime, playerState.duration, playerState.volume, seek, setVolume, events])
+  }, [scrollControls, mode, playerState.currentTime, playerState.duration, playerState.volume, playerState.isPlaying, seek, setVolume, events, handleSeekStart, handleSeekEnd])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle if the player or its children are focused
       if (playerRef.current?.contains(document.activeElement) && mode === "host") {
-        if (e.key === "ArrowLeft") {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
           e.preventDefault()
-          const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime - 5))
+          const wasPlaying = playerState.isPlaying
+          if (wasPlaying && !isSeekingRef.current) {
+            handleSeekStart()
+          }
+          const seekAmount = e.key === "ArrowLeft" ? -5 : 5
+          const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + seekAmount))
           seek(newTime)
           events?.onSeek?.(newTime)
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault()
-          const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + 5))
-          seek(newTime)
-          events?.onSeek?.(newTime)
+          if (wasPlaying) {
+            setTimeout(() => {
+              if (isSeekingRef.current) {
+                handleSeekEnd()
+              }
+            }, 100)
+          }
         }
       }
     }
 
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [mode, playerState.currentTime, playerState.duration, seek, events])
+  }, [mode, playerState.currentTime, playerState.duration, playerState.isPlaying, seek, events, handleSeekStart, handleSeekEnd])
 
   useEffect(() => {
     if (track && track.id !== currentTrack?.id && track.id !== "placeholder") {
@@ -253,16 +297,30 @@ export function AudioPlayer({
   const handleSeek = (value: number[]) => {
     if (mode === "host") {
       const time = value[0]
-      seek(time)
-      events?.onSeek?.(time)
+      // Only seek if already paused (or was paused by handleSeekStart)
+      if (!playerState.isPlaying || isSeekingRef.current) {
+        seek(time)
+        events?.onSeek?.(time)
+      }
     }
   }
 
   const handleSkipBy = (seconds: number) => {
     if (mode !== "host") return
+    const wasPlaying = playerState.isPlaying
+    if (wasPlaying && !isSeekingRef.current) {
+      handleSeekStart()
+    }
     const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + seconds))
     seek(newTime)
     events?.onSeek?.(newTime)
+    if (wasPlaying) {
+      setTimeout(() => {
+        if (isSeekingRef.current) {
+          handleSeekEnd()
+        }
+      }, 100)
+    }
   }
 
   const handleVolumeChange = (value: number) => {
@@ -376,6 +434,8 @@ export function AudioPlayer({
                 max={playerState.duration || 100}
                 step={0.1}
                 onValueChange={handleSeek}
+                onPointerDown={handleSeekStart}
+                onPointerUp={handleSeekEnd}
                 disabled={mode === "listener"}
               />
             </div>
@@ -520,6 +580,8 @@ export function AudioPlayer({
                 max={playerState.duration || 100}
                 step={0.1}
                 onValueChange={handleSeek}
+                onPointerDown={handleSeekStart}
+                onPointerUp={handleSeekEnd}
                 disabled={mode === "listener"}
               />
             </div>
@@ -590,8 +652,14 @@ export function AudioPlayer({
               max={playerState.duration || 100}
               step={0.1}
               onValueChange={handleSeek}
-              onPointerDown={() => setIsDragging(true)}
-              onPointerUp={() => setIsDragging(false)}
+              onPointerDown={() => {
+                setIsDragging(true)
+                handleSeekStart()
+              }}
+              onPointerUp={() => {
+                setIsDragging(false)
+                handleSeekEnd()
+              }}
               disabled={mode === "listener"}
               className={cn("w-full", mode === "listener" && "opacity-50 cursor-not-allowed")}
             />

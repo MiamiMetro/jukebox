@@ -62,7 +62,15 @@ export class HTML5AudioAdapter implements AudioPlayerAdapter {
 
   seek(time: number): void {
     if (Number.isFinite(time) && time >= 0) {
-      this.audio.currentTime = time
+      // Check if audio has a source and is ready
+      if (this.audio.src && this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        try {
+          this.audio.currentTime = time
+        } catch (error) {
+          // Silently handle seek errors (audio not ready, source not loaded, etc.)
+          console.debug("Seek failed:", error)
+        }
+      }
     }
   }
 
