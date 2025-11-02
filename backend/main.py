@@ -12,20 +12,18 @@ clients = set()
 
 # global playback state
 state = {
-    "track": "https://yhoyscexuxnouexhcndo.supabase.co/storage/v1/object/public/jukebox-tracks/zx6NkXvzrNc.webm",
+    "track": "https://yhoyscexuxnouexhcndo.supabase.co/storage/v1/object/public/jukebox-tracks/XGWQXjyUip8.webm",
     "is_playing": False,
     "start_time": None,  # when the track started (server time)
     "position": 0.0,     # where we paused
 }
 
 async def broadcast(data: dict):
-    msg = json.dumps(data)
     dead = []
     for c in list(clients):
         try:
-            await c.send_text(msg)
+            await c.send_json(data)
         except Exception:
-            # collect dead/closed websockets to remove
             dead.append(c)
     for c in dead:
         try:
@@ -41,16 +39,15 @@ async def ws_endpoint(ws: WebSocket):
     print("Client connected")
 
     # send current state when someone joins
-    await ws.send_text(json.dumps({
+    await ws.send_json({
         "type": "state_sync",
         "payload": state,
         "server_time": time.time()
-    }))
+    })
 
     try:
         while True:
-            msg = await ws.receive_text()
-            data = json.loads(msg)
+            data = await ws.receive_json()
             t = data.get("type")
 
             if t == "play":
@@ -102,19 +99,19 @@ async def ws_endpoint(ws: WebSocket):
                 })
 
             elif t == "ping":
-                await ws.send_text(json.dumps({
+                await ws.send_json({
                     "type": "pong",
                     "server_time": time.time()
-                }))
+                })
 
             elif t == "get_state":
                 # Send current state to requesting client
                 state["position"] = time.time() - state["start_time"]
-                await ws.send_text(json.dumps({
+                await ws.send_json({
                     "type": "state_sync",
                     "payload": state,
                     "server_time": time.time()
-                }))
+                })
 
     except WebSocketDisconnect:
         clients.remove(ws)
