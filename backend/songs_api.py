@@ -185,15 +185,10 @@ async def get_song_by_filename(filename: str):
     
     try:
         # Get file info
-        files = supabase.storage.from_(supabase_bucket).list()
+        file_info = supabase.storage.from_(supabase_bucket).info(filename)
+
         
-        file_info = None
-        for f in files:
-            if f.get('name') == filename:
-                file_info = f
-                break
-        
-        if not file_info:
+        if not file_info or not file_info.get('name'):
             raise HTTPException(status_code=404, detail=f"Song '{filename}' not found")
         
         public_url = supabase.storage.from_(supabase_bucket).get_public_url(filename)
@@ -204,12 +199,12 @@ async def get_song_by_filename(filename: str):
             cloudflare_url = f"{cloudflare_domain}/{supabase_bucket}/{filename}"
         
         return Song(
-            id=filename,
-            filename=filename,
+            id=file_info.get('id'),
+            filename=file_info.get('name') or filename if filename else file_info.get('name'),
             url=public_url,
-            size=file_info.get('metadata', {}).get('size') if isinstance(file_info.get('metadata'), dict) else None,
+            size=file_info.get('size'),
             created_at=file_info.get('created_at'),
-            updated_at=file_info.get('updated_at'),
+            updated_at=file_info.get('last_modified'),
             cloudflare_url=cloudflare_url
         )
         
@@ -221,6 +216,25 @@ async def get_song_by_filename(filename: str):
             detail=f"Failed to fetch song: {str(e)}"
         )
 
+@router.get("/exists/{filename}")
+async def check_song_exists(filename: str):
+    """
+    Check if a song exists in Supabase storage.
+    """
+    if not supabase:
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase not configured. Please set SUPABASE_URL and SUPABASE_KEY in .env file"
+        )
+    
+    try:
+        exists = supabase.storage.from_(supabase_bucket).exists(filename)
+        return exists
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check song existence: {str(e)}"
+        )
 
 @router.delete("/{filename}")
 async def delete_song(filename: str):
@@ -252,4 +266,3 @@ async def delete_song(filename: str):
             status_code=500,
             detail=f"Failed to delete song: {str(e)}"
         )
-

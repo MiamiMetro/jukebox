@@ -84,10 +84,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (needsNewAdapter) {
         // Destroy previous adapter
         if (adapterRef.current) {
+          console.debug(`[AudioPlayer] Destroying previous adapter (source: ${currentSourceRef.current})`)
           adapterRef.current.destroy()
         }
 
         // Create new adapter
+        console.debug(`[AudioPlayer] Creating new adapter (source: ${track.source})`)
         const adapter = AudioAdapterFactory.createAdapter(track.source, containerIdRef.current)
         adapterRef.current = adapter
         currentSourceRef.current = track.source
@@ -120,6 +122,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         adapter.onBuffering((isBuffering) => {
           setPlayerState((prev) => ({ ...prev, isBuffering }))
         })
+      } else {
+        console.debug(`[AudioPlayer] Reusing existing adapter (source: ${track.source})`)
       }
 
       // Get the adapter (either newly created or reused)
