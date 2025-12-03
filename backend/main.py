@@ -26,17 +26,28 @@ app.mount("/static", StaticFiles(directory=os.path.dirname(__file__)), name="sta
 
 clients = set()
 
-# global playback state
-state = {
-    "track": {
+queue = [
+    {
         "id": "1",
+        "title": "What Did I Miss",
+        "artist": "Drake",
+        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
+        "artwork": "https://img.youtube.com/vi/weU76DGHKU0/maxresdefault.jpg",
+        "source": "html5"
+    },
+    {
+        "id": "2",
         "title": "Nokia",
         "artist": "Drake",
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/Drake_-_NOKIA_Official_Music_Video_6208fcb9.mp3",
         "artwork": "https://i.ytimg.com/vi/8ekJMC8OtGU/maxresdefault.jpg",
-        # "artwork": "https://picsum.photos/id/842/1500/1500",
         "source": "html5"
-    },
+    }
+]
+
+# global playback state
+state = {
+    "track": queue[0],
     "is_playing": False,
     "start_time": None,  # when the track started (server time)
     "position": 0.0,     # where we paused
@@ -142,6 +153,19 @@ async def ws_endpoint(ws: WebSocket):
                 state["is_playing"] = False
                 await broadcast({
                     "type": "set_track",
+                    "payload": {"track": state["track"]},
+                    "server_time": now
+                })
+
+            elif t == "next-track":
+                # round robin to the next track
+                now = time.time()
+                state["track"] = queue[(queue.index(state["track"]) + 1) % len(queue)]
+                state["position"] = 0.0
+                state["is_playing"] = False
+                state["start_time"] = None
+                await broadcast({
+                    "type": "next-track",
                     "payload": {"track": state["track"]},
                     "server_time": now
                 })

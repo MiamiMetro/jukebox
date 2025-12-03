@@ -55,12 +55,11 @@ export class HTML5AudioAdapter implements AudioPlayerAdapter {
   async play(): Promise<void> {
     // Check if audio has a source and is ready before playing
     if (this.audio.src && this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      try {
-        await this.audio.play()
-      } catch (error) {
-        // Silently handle play errors (audio not ready, source not loaded, etc.)
-        console.debug("Play failed:", error)
-      }
+      // Let errors propagate so caller can handle retry logic (important for Safari autoplay)
+      await this.audio.play()
+    } else {
+      // If not ready, throw an error so caller knows to retry
+      throw new Error("Audio not ready to play")
     }
   }
 

@@ -12,6 +12,7 @@ function Home() {
     const [mode, setMode] = useState<"host" | "listener">("host");
     const [variant, setVariant] = useState<"full" | "mini">("full");
     const ws = useRef<WebSocket | null>(null);
+    const isChangingTrackRef = useRef<boolean>(false);
 
     const [trackUrl, setTrackUrl] = useState<string>("");
     const [trackMode, setTrackMode] = useState<"html5" | "youtube">("html5");
@@ -66,7 +67,7 @@ function Home() {
                     controls?.seek(Math.max(0, currentPos));
                     controls?.play();
                 }
-            } else if (data.payload && data.payload.start_time) {
+            } else if (data.type === "play" && data.payload && data.payload.start_time) {
                 const serverTime = data.server_time;
                 const currentPos = serverTime - data.payload.start_time;
 
@@ -115,6 +116,96 @@ function Home() {
 
                 controls?.seek(0);
                 controls?.pause();
+            } else if (data.type === "next-track") {
+                const trackData = data.payload.track;
+                const state = controls?.getState();
+                const wasPlaying = state?.isPlaying || false;
+                
+                // Set flag to prevent duplicate commands during track change
+                isChangingTrackRef.current = true;
+                
+                setTrack(trackData);
+                controls?.seek(0);
+                
+                // Backend sets is_playing to False on next-track, so we need to pause first
+                // to sync with backend state, then play if it was playing before
+                controls?.pause();
+                
+                // If it was playing, wait for track to load then play with retry logic
+                // This allows autoplay to work on mobile after first user interaction
+                if (wasPlaying) {
+                    // Reliable autoplay: poll until track is ready, then play with retries
+                    let attempts = 0;
+                    const maxAttempts = 20; // 20 attempts * 150ms = 3 seconds max
+                    const attemptInterval = 150; // Check every 150ms
+                    
+                    const tryPlay = () => {
+                        attempts++;
+                        const currentState = controls?.getState();
+                        
+                        // Check if track is loaded (duration > 0 indicates track is ready)
+                        const isTrackReady = currentState?.duration && currentState.duration > 0;
+                        
+                        if (isTrackReady) {
+                            // Track is ready, try to play
+                            if (controls) {
+                                controls.play().then(() => {
+                                    // Play succeeded
+                                    // If we're in host mode, send play command to sync with backend
+                                    if (mode === "host") {
+                                        const playData = {
+                                            type: "play",
+                                        };
+                                        ws.current?.send(JSON.stringify(playData));
+                                    }
+                                    // Clear flag and request state sync
+                                    setTimeout(() => {
+                                        isChangingTrackRef.current = false;
+                                        const syncData = {
+                                            type: "get_state",
+                                        };
+                                        ws.current?.send(JSON.stringify(syncData));
+                                    }, 300);
+                                }).catch((error: unknown) => {
+                                    // Play failed, retry if we haven't exceeded max attempts
+                                    console.debug("Play attempt failed, retrying...", error);
+                                    if (attempts < maxAttempts) {
+                                        setTimeout(tryPlay, attemptInterval);
+                                    } else {
+                                        // Max attempts reached, give up
+                                        console.debug("Max play attempts reached, giving up");
+                                        isChangingTrackRef.current = false;
+                                    }
+                                });
+                            } else {
+                                // Controls not available, retry
+                                if (attempts < maxAttempts) {
+                                    setTimeout(tryPlay, attemptInterval);
+                                } else {
+                                    isChangingTrackRef.current = false;
+                                }
+                            }
+                        } else {
+                            // Track not ready yet, check again
+                            if (attempts < maxAttempts) {
+                                setTimeout(tryPlay, attemptInterval);
+                            } else {
+                                // Max attempts reached, give up
+                                console.debug("Track did not load in time, giving up autoplay");
+                                isChangingTrackRef.current = false;
+                            }
+                        }
+                    };
+                    
+                    // Start trying after a small initial delay
+                    setTimeout(tryPlay, 100);
+                } else {
+                    // If not playing, just clear the flag after a short delay
+                    setTimeout(() => {
+                        isChangingTrackRef.current = false;
+                    }, 100);
+                }
+
             }
         };
 
@@ -160,6 +251,10 @@ function Home() {
                 onPlayerReady={(playerControls) => setControls(playerControls)}
                 events={{
                     onPlay: () => {
+                        // Don't send play command if we're in the middle of a track change
+                        if (isChangingTrackRef.current) {
+                            return;
+                        }
                         if (mode === "host") {
                             const data = {
                                 type: "play",
@@ -175,6 +270,10 @@ function Home() {
                         console.log("sent", data);
                     },
                     onPause: () => {
+                        // Don't send pause command if we're in the middle of a track change
+                        if (isChangingTrackRef.current) {
+                            return;
+                        }
                         if (mode === "host") {
                             const data = {
                                 type: "pause",
@@ -232,20 +331,13 @@ function Home() {
                 console.log("sent", data);
             }} className="m-2">Sync</Button>
 
-            <Input type="text" placeholder="Track URL" value={trackUrl} onChange={(e) => setTrackUrl(e.target.value)} />
             <Button onClick={() => {
                 const data = {
-                    type: "set_track",
-                    payload: {
-                        track: trackUrl,
-                    },
+                    type: "next-track",
                 };
                 ws.current?.send(JSON.stringify(data));
                 console.log("sent", data);
-            }} className="m-2">Set Track</Button>
-            <Button onClick={() => {
-                setTrackMode((prev) => prev === "html5" ? "youtube" : "html5");
-            }} className="m-2">Track Mode: {trackMode}</Button>
+            }} className="m-2">Next Track</Button>
         </div>
     );
 }

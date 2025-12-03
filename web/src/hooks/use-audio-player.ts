@@ -28,6 +28,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
   const adapterRef = useRef<AudioPlayerAdapter | null>(null)
   const containerIdRef = useRef<string>(`player-${Math.random().toString(36).substr(2, 9)}`)
+  // Track if user has interacted with the player (required for mobile autoplay)
+  const hasUserInteractedRef = useRef<boolean>(false)
+  // Track current source type to reuse adapter when possible (preserves Safari user interaction context)
+  const currentSourceRef = useRef<"html5" | "youtube" | "soundcloud" | "howler" | null>(null)
 
   // Update Media Session metadata
   const updateMediaSession = useCallback((track: Track | null, isPlaying: boolean) => {
@@ -72,49 +76,60 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   // Load track
   const loadTrack = useCallback(
     async (track: Track) => {
-      // Destroy previous adapter
-      if (adapterRef.current) {
-        adapterRef.current.destroy()
+      // Only destroy and recreate adapter if source type changed
+      // Reusing the same adapter instance preserves Safari's user interaction context
+      // This is critical for Safari - it maintains user interaction per audio element
+      const needsNewAdapter = !adapterRef.current || currentSourceRef.current !== track.source
+      
+      if (needsNewAdapter) {
+        // Destroy previous adapter
+        if (adapterRef.current) {
+          adapterRef.current.destroy()
+        }
+
+        // Create new adapter
+        const adapter = AudioAdapterFactory.createAdapter(track.source, containerIdRef.current)
+        adapterRef.current = adapter
+        currentSourceRef.current = track.source
+
+        // Setup event listeners (only needed when creating new adapter)
+        adapter.onTimeUpdate((time) => {
+          setPlayerState((prev) => ({ ...prev, currentTime: time }))
+          if (mode === "listener" && onTimeSync) {
+            onTimeSync(time)
+          }
+        })
+
+        adapter.onDurationChange((duration) => {
+          setPlayerState((prev) => ({ ...prev, duration }))
+        })
+
+        adapter.onPlay(() => {
+          setPlayerState((prev) => ({ ...prev, isPlaying: true }))
+        })
+
+        adapter.onPause(() => {
+          setPlayerState((prev) => ({ ...prev, isPlaying: false }))
+        })
+
+        adapter.onEnded(() => {
+          setPlayerState((prev) => ({ ...prev, isPlaying: false }))
+          onTrackEnd?.()
+        })
+
+        adapter.onBuffering((isBuffering) => {
+          setPlayerState((prev) => ({ ...prev, isBuffering }))
+        })
       }
 
-      // Create new adapter
-      const adapter = AudioAdapterFactory.createAdapter(track.source, containerIdRef.current)
-      adapterRef.current = adapter
+      // Get the adapter (either newly created or reused)
+      const adapter = adapterRef.current!
 
-      // Setup event listeners
-      adapter.onTimeUpdate((time) => {
-        setPlayerState((prev) => ({ ...prev, currentTime: time }))
-        if (mode === "listener" && onTimeSync) {
-          onTimeSync(time)
-        }
-      })
-
-      adapter.onDurationChange((duration) => {
-        setPlayerState((prev) => ({ ...prev, duration }))
-      })
-
-      adapter.onPlay(() => {
-        setPlayerState((prev) => ({ ...prev, isPlaying: true }))
-      })
-
-      adapter.onPause(() => {
-        setPlayerState((prev) => ({ ...prev, isPlaying: false }))
-      })
-
-      adapter.onEnded(() => {
-        setPlayerState((prev) => ({ ...prev, isPlaying: false }))
-        onTrackEnd?.()
-      })
-
-      adapter.onBuffering((isBuffering) => {
-        setPlayerState((prev) => ({ ...prev, isBuffering }))
-      })
-
-      // Load the track
+      // Load the track (this will reuse the same audio element for HTML5, preserving Safari context)
       await adapter.load(track.url)
       setCurrentTrack(track)
 
-      // Apply persisted volume/mute on the new adapter
+      // Apply persisted volume/mute on the adapter
       try {
         const persistedVolume = localStorage.getItem("jukebox.volume")
         const persistedMuted = localStorage.getItem("jukebox.isMuted")
@@ -131,8 +146,18 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }
       } catch {}
 
-      if (playerState.isPlaying) {
-        await adapter.play()
+      // Only attempt autoplay if user has interacted (required for mobile browsers)
+      // This allows autoplay to work after the first user interaction
+      // Reusing the same audio element means Safari will honor the previous user interaction
+      if (playerState.isPlaying && hasUserInteractedRef.current) {
+        try {
+          await adapter.play()
+        } catch (error) {
+          // Autoplay failed (e.g., on mobile without user interaction)
+          // Silently handle - user will need to press play
+          console.debug("Autoplay failed:", error)
+          setPlayerState((prev) => ({ ...prev, isPlaying: false }))
+        }
       }
 
       // Update Media Session metadata
@@ -144,6 +169,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   // Play
   const play = useCallback(async () => {
     if (adapterRef.current) {
+      // Mark that user has interacted (enables autoplay for future track changes on mobile)
+      hasUserInteractedRef.current = true
       await adapterRef.current.play()
       if (mode === "listener") {
         setPlayerState((prev) => ({ ...prev, isLive: true }))

@@ -81,14 +81,18 @@ async def search_youtube(
             for entry in info.get('entries', []):
                 if entry is None:
                     continue
+                
+                video_id = entry.get('id', '')
+                # Construct thumbnail URL manually since extract_flat doesn't include it
+                thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else None
                     
                 result = SearchResult(
-                    id=entry.get('id', ''),
+                    id=video_id,
                     title=entry.get('title', 'No title'),
                     duration=entry.get('duration'),
-                    thumbnail=entry.get('thumbnail'),
+                    thumbnail=thumbnail_url,
                     channel=entry.get('channel', entry.get('uploader', 'Unknown')),
-                    url=entry.get('url', f"https://www.youtube.com/watch?v={entry.get('id', '')}")
+                    url=entry.get('url', f"https://www.youtube.com/watch?v={video_id}")
                 )
                 results.append(result)
             

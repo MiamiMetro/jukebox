@@ -49,7 +49,7 @@ interface AudioPlayerProps {
 }
 
 export interface PlayerControls {
-  play: () => void
+  play: () => Promise<void>
   pause: () => void
   seek: (time: number) => void
   skipForward: (seconds: number) => void
