@@ -1,9 +1,25 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import json, time
 import os
+from yt_api import router as youtube_router
+from songs_api import router as songs_router
 
 app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routers
+app.include_router(youtube_router)
+app.include_router(songs_router)
 
 # Mount static files (HTML files in the backend directory)
 app.mount("/static", StaticFiles(directory=os.path.dirname(__file__)), name="static")
@@ -12,7 +28,7 @@ clients = set()
 
 # global playback state
 state = {
-    "track": "https://yhoyscexuxnouexhcndo.supabase.co/storage/v1/object/public/jukebox-tracks/XGWQXjyUip8.webm",
+    "track": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
     "is_playing": False,
     "start_time": None,  # when the track started (server time)
     "position": 0.0,     # where we paused

@@ -391,6 +391,11 @@ export function AudioPlayer({
     }
   }, [track])
 
+  // Memoize artwork URL to prevent re-fetching on every render
+  const artworkUrl = useMemo(() => {
+    return displayTrack.artwork || undefined
+  }, [displayTrack.artwork, displayTrack.id]) // Include track.id to change only when track changes
+
   // Mini player variant
   if (variant === "mini") {
     return (
@@ -407,11 +412,14 @@ export function AudioPlayer({
         <div className="flex flex-col gap-1.5 p-2 md:hidden">
           {/* Track name and volume at top */}
           <div className="flex items-center gap-2 min-w-0">
-            {displayTrack.artwork && (
+            {artworkUrl && (
               <img
-                src={displayTrack.artwork || "/placeholder.svg"}
+                key={`artwork-${displayTrack.id}`}
+                src={artworkUrl}
                 alt={displayTrack.title}
                 className="h-9 w-9 rounded object-cover shrink-0"
+                loading="lazy"
+                decoding="async"
               />
             )}
             <div className="flex-1 min-w-0">
@@ -515,11 +523,14 @@ export function AudioPlayer({
           <div className="flex items-center gap-3">
             {/* Track info */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
-              {displayTrack.artwork && (
+              {artworkUrl && (
                 <img
-                  src={displayTrack.artwork || "/placeholder.svg"}
+                  key={`artwork-${displayTrack.id}`}
+                  src={artworkUrl}
                   alt={displayTrack.title}
                   className="h-14 w-14 rounded object-cover shrink-0"
+                  loading="lazy"
+                  decoding="async"
                 />
               )}
               <div className="flex-1 min-w-0">
@@ -639,11 +650,14 @@ export function AudioPlayer({
         <div className="p-4 md:p-6 space-y-4 md:space-y-6">
           {/* Track artwork and info */}
           <div className="flex items-center gap-3 md:gap-4">
-            {displayTrack.artwork && (
+            {artworkUrl && (
               <img
-                src={displayTrack.artwork || "/placeholder.svg"}
+                key={`artwork-${displayTrack.id}`}
+                src={artworkUrl}
                 alt={displayTrack.title}
                 className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shadow-lg shrink-0"
+                loading="lazy"
+                decoding="async"
               />
             )}
             <div className="flex-1 min-w-0">
