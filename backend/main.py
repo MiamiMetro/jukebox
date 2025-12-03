@@ -28,7 +28,15 @@ clients = set()
 
 # global playback state
 state = {
-    "track": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
+    "track": {
+        "id": "1",
+        "title": "Nokia",
+        "artist": "Drake",
+        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/Drake_-_NOKIA_Official_Music_Video_6208fcb9.mp3",
+        "artwork": "https://i.ytimg.com/vi/8ekJMC8OtGU/maxresdefault.jpg",
+        # "artwork": "https://picsum.photos/id/842/1500/1500",
+        "source": "html5"
+    },
     "is_playing": False,
     "start_time": None,  # when the track started (server time)
     "position": 0.0,     # where we paused
@@ -105,7 +113,31 @@ async def ws_endpoint(ws: WebSocket):
 
             elif t == "set_track":
                 now = time.time()
-                state["track"] = data["payload"]["track"]
+                track_data = data.get("payload", {}).get("track", {})
+                
+                # If track is just a URL string, convert it to full track object
+                if isinstance(track_data, str):
+                    # Extract filename from URL for title
+                    filename = track_data.split("/")[-1].replace(".mp3", "").replace("_", " ")
+                    state["track"] = {
+                        "id": str(time.time()),  # Generate unique ID
+                        "title": filename,
+                        "artist": "Unknown Artist",
+                        "url": track_data,
+                        "artwork": "https://picsum.photos/id/842/1500/1500",
+                        "source": "youtube" if "youtube.com" in track_data or "youtu.be" in track_data else "html5"
+                    }
+                else:
+                    # Full track object provided
+                    state["track"] = {
+                        "id": track_data.get("id", str(time.time())),
+                        "title": track_data.get("title", "Unknown"),
+                        "artist": track_data.get("artist", "Unknown Artist"),
+                        "url": track_data.get("url", ""),
+                        "artwork": track_data.get("artwork"),
+                        "source": track_data.get("source", "html5")
+                    }
+                
                 state["position"] = 0.0
                 state["is_playing"] = False
                 await broadcast({

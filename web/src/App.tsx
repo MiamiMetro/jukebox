@@ -31,14 +31,29 @@ function Home() {
             const currentTrackMode = trackModeRef.current;
             if (data.type === "state_sync") {
                 setTrack((prev: Track | null) => {
-                    if (!data.payload.track) return prev;
+                    const trackData = data.payload.track;
+                    if (!trackData) return prev;
+
+                    // Backend now sends full track object
+                    if (typeof trackData === "object" && trackData.url) {
+                        return {
+                            id: trackData.id || "1",
+                            title: trackData.title || "Unknown",
+                            artist: trackData.artist || "Unknown Artist",
+                            source: (trackData.source || "html5") as "html5" | "youtube",
+                            artwork: trackData.artwork || undefined,
+                            url: trackData.url,
+                        } as Track;
+                    }
+
+                    // Fallback for old format (just URL string)
                     return {
                         id: "1",
-                        title: "My Song",
-                        artist: "Artist Name",
+                        title: "Unknown",
+                        artist: "Unknown Artist",
                         source: currentTrackMode,
-                        artwork: "https://picsum.photos/1500",
-                        url: data.payload.track,
+                        artwork: undefined,
+                        url: typeof trackData === "string" ? trackData : "",
                     } as Track;
                 });
 
@@ -74,24 +89,32 @@ function Home() {
                     controls?.pause();
                 }
             } else if (data.type === "set_track") {
-                setTrack(() => {
-                    return {
+                const trackData = data.payload.track;
+
+                // Backend now sends full track object
+                if (typeof trackData === "object" && trackData.url) {
+                    setTrack({
+                        id: trackData.id || "1",
+                        title: trackData.title || "Unknown",
+                        artist: trackData.artist || "Unknown Artist",
+                        source: (trackData.source || "html5") as "html5" | "youtube",
+                        artwork: trackData.artwork || undefined,
+                        url: trackData.url,
+                    } as Track);
+                } else {
+                    // Fallback for old format (just URL string)
+                    setTrack({
                         id: "1",
-                        title: "New Song",
-                        artist: "New Artist",
+                        title: "Unknown",
+                        artist: "Unknown Artist",
                         source: currentTrackMode,
-                        artwork: "https://picsum.photos/1500",
-                        url: data.payload.track,
-                    } as Track;
-                });
-                console.log({
-                    id: "1",
-                    title: "New Song",
-                    artist: "New Artist",
-                    source: currentTrackMode,
-                    artwork: "https://picsum.photos/1500",
-                    url: data.payload.track,
-                })
+                        artwork: undefined,
+                        url: typeof trackData === "string" ? trackData : "",
+                    } as Track);
+                }
+
+                controls?.seek(0);
+                controls?.pause();
             }
         };
 
@@ -407,7 +430,7 @@ function About() {
     return (
         <div className="p-4 max-w-4xl mx-auto">
             <h2 className="text-2xl font-semibold mb-4">YouTube API Demo & Debug</h2>
-            
+
             {/* Search Section */}
             <div className="mb-6 p-4 border rounded-lg">
                 <h3 className="text-xl font-semibold mb-2">Search YouTube</h3>
