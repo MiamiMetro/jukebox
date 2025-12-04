@@ -17,9 +17,9 @@ createRoot(document.getElementById('root')!).render(
       </BrowserRouter>
 
       {/* Only show Devtools during development */}
-      {import.meta.env.DEV && (
+      {/* {import.meta.env.DEV && (
         <ReactQueryDevtools initialIsOpen={false} position="bottom" buttonPosition='top-right' />
-      )}
+      )} */}
     </QueryClientProvider>
   </StrictMode>,
 )

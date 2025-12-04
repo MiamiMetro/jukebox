@@ -18,7 +18,7 @@ queue = [
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
         "artwork": "https://img.youtube.com/vi/weU76DGHKU0/maxresdefault.jpg",
         "source": "html5",
-        "duration": 242.0  # Duration in seconds (3 minutes)
+        "duration": 242.0
     },
     {
         "id": "2",
@@ -27,16 +27,16 @@ queue = [
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/Drake_-_NOKIA_Official_Music_Video_6208fcb9.mp3",
         "artwork": "https://i.ytimg.com/vi/8ekJMC8OtGU/maxresdefault.jpg",
         "source": "html5",
-        "duration": 264.0  # Duration in seconds (4 minutes)
+        "duration": 264.0
     },
     {
-        "id": "2",
+        "id": "3",
         "title": "Timeless",
         "artist": "The Weeknd",
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/yt-5EpyN_6dqyk.mp3",
         "artwork": "https://i.ytimg.com/vi/5EpyN_6dqyk/maxresdefault.jpg",
         "source": "html5",
-        "duration": 256.0  # Duration in seconds (4 minutes)
+        "duration": 255.0 
     },
 ]
 

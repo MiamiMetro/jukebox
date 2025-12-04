@@ -647,7 +647,7 @@ export function AudioPlayer({
         tabIndex={0}
         className={cn("w-full max-w-2xl mx-auto focus:outline-none focus:ring-2 focus:ring-primary/20", className)}
       >
-        <div className="p-4 md:p-6 space-y-4 md:space-y-6">
+        <div className="px-4 py-2 md:px-4 md:py-3 space-y-2 md:space-y-3">
           {/* Track artwork and info */}
           <div className="flex items-center gap-3 md:gap-4">
             {artworkUrl && (
