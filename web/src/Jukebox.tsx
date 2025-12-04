@@ -2,17 +2,8 @@ import { AudioPlayer, type PlayerControls } from "./components/audio-player";
 import type { Track } from "./types/audio-player";
 import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
-
-import {
-    Drawer,
-    DrawerClose,
-    DrawerContent,
-    DrawerDescription,
-    DrawerHeader,
-    DrawerTitle,
-    DrawerTrigger,
-} from "./components/ui/drawer";
-import { Menu, X } from "lucide-react";
+import { StatefulDrawer } from "./components/ui/stateful-drawer";
+import { ListMusic, Users } from "lucide-react";
 
 // Shared audio player state and websocket logic
 let sharedControls: PlayerControls | null = null;
@@ -371,94 +362,166 @@ function MiddleBottom() {
     );
 }
 
+// Left Sidebar Content Component - Always mounted, state preserved
+function LeftSidebarContent() {
+    const [count, setCount] = useState(0);
+    const [inputValue, setInputValue] = useState("");
+    
+    return (
+        <div className="h-full overflow-y-auto p-4">
+            <h2 className="text-xl font-semibold mb-4">Left Sidebar</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+                This content stays mounted and preserves state when the drawer closes.
+            </p>
+            
+            {/* Example state that will be preserved */}
+            <div className="space-y-4">
+                <div>
+                    <label className="text-sm font-medium mb-2 block">Test Input (state preserved)</label>
+                    <input
+                        type="text"
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        placeholder="Type something..."
+                        className="w-full px-3 py-2 border rounded-md"
+                    />
+                </div>
+                
+                <div>
+                    <label className="text-sm font-medium mb-2 block">Counter (state preserved)</label>
+                    <div className="flex items-center gap-2">
+                        <Button onClick={() => setCount(count - 1)} variant="outline" size="sm">
+                            -
+                        </Button>
+                        <span className="text-lg font-semibold min-w-[3rem] text-center">{count}</span>
+                        <Button onClick={() => setCount(count + 1)} variant="outline" size="sm">
+                            +
+                        </Button>
+                    </div>
+                </div>
+            </div>
+            
+            {/* Left sidebar content can go here */}
+        </div>
+    );
+}
+
+// Right Sidebar Content Component - Always mounted, state preserved
+function RightSidebarContent() {
+    const [selectedTab, setSelectedTab] = useState("info");
+    const [notes, setNotes] = useState("");
+    
+    return (
+        <div className="h-full overflow-y-auto p-4">
+            <h2 className="text-xl font-semibold mb-4">Right Sidebar</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+                This content stays mounted and preserves state when the drawer closes.
+            </p>
+            
+            {/* Example state that will be preserved */}
+            <div className="space-y-4">
+                <div>
+                    <label className="text-sm font-medium mb-2 block">Tabs (state preserved)</label>
+                    <div className="flex gap-2">
+                        <Button
+                            variant={selectedTab === "info" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setSelectedTab("info")}
+                        >
+                            Info
+                        </Button>
+                        <Button
+                            variant={selectedTab === "notes" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setSelectedTab("notes")}
+                        >
+                            Notes
+                        </Button>
+                    </div>
+                    <div className="mt-2 p-2 bg-muted rounded">
+                        {selectedTab === "info" ? "Information tab selected" : "Notes tab selected"}
+                    </div>
+                </div>
+                
+                <div>
+                    <label className="text-sm font-medium mb-2 block">Notes (state preserved)</label>
+                    <textarea
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        placeholder="Write notes here..."
+                        className="w-full px-3 py-2 border rounded-md min-h-[100px]"
+                    />
+                </div>
+            </div>
+            
+            {/* Right sidebar content can go here */}
+        </div>
+    );
+}
+
 function Jukebox() {
     const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
     const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
 
-    const LeftSidebarContent = () => (
-        <div className="h-full overflow-y-auto">
-            <h2 className="text-xl font-semibold mb-4">Left Sidebar</h2>
-            {/* Left sidebar content can go here */}
-        </div>
-    );
-
-    const RightSidebarContent = () => (
-        <div className="h-full overflow-y-auto">
-            <h2 className="text-xl font-semibold mb-4">Right Sidebar</h2>
-            {/* Right sidebar content can go here */}
-        </div>
-    );
-
     return (
         <div className="h-screen flex flex-col overflow-hidden">
+            {/* Mobile Drawers - Always mounted, state preserved */}
+            <StatefulDrawer
+                open={leftDrawerOpen}
+                onOpenChange={setLeftDrawerOpen}
+                direction="left"
+                title="Left Sidebar"
+                description="Navigation and controls"
+            >
+                <LeftSidebarContent />
+            </StatefulDrawer>
+
+            <StatefulDrawer
+                open={rightDrawerOpen}
+                onOpenChange={setRightDrawerOpen}
+                direction="right"
+                title="Right Sidebar"
+                description="Additional information"
+            >
+                <RightSidebarContent />
+            </StatefulDrawer>
+
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] grid-rows-[auto_1fr] gap-4 p-4">
                 {/* Left Sidebar - Desktop */}
-                <div className="hidden lg:block col-start-1 row-start-1 row-end-3 bg-card border rounded-lg p-4 overflow-y-auto">
+                <div className="hidden lg:block col-start-1 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden">
                     <LeftSidebarContent />
                 </div>
 
-                {/* Top Middle - Audio Player with drawer triggers on mobile */}
+                {/* Top Middle - Audio Player */}
                 <div className="col-start-1 lg:col-start-2 row-start-1 bg-card border rounded-lg px-4 py-2">
-                    {/* Mobile: Hamburger buttons with Jukebox text in middle */}
+                    {/* Mobile: Header with drawer trigger buttons */}
                     <div className="flex items-center gap-2 mb-2 lg:hidden">
-                        <Drawer open={leftDrawerOpen} onOpenChange={setLeftDrawerOpen} direction="left">
-                            <DrawerTrigger asChild>
-                                <Button variant="outline" size="icon">
-                                    <Menu className="h-4 w-4" />
-                                </Button>
-                            </DrawerTrigger>
-                            <DrawerContent className="max-w-sm">
-                                <DrawerHeader>
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <DrawerTitle>Left Sidebar</DrawerTitle>
-                                            <DrawerDescription>Navigation and controls</DrawerDescription>
-                                        </div>
-                                        <DrawerClose asChild>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                                                <X className="h-4 w-4" />
-                                            </Button>
-                                        </DrawerClose>
-                                    </div>
-                                </DrawerHeader>
-                                <div className="p-4 overflow-y-auto">
-                                    <LeftSidebarContent />
-                                </div>
-                            </DrawerContent>
-                        </Drawer>
+                        <Button 
+                            variant="outline" 
+                            size="icon"
+                            onClick={() => setLeftDrawerOpen(true)}
+                        >
+                            <ListMusic className="h-4 w-4" />
+                        </Button>
+                        
                         <div className="flex-1 flex justify-center">
                             <h1 className="text-xl font-bold">Jukebox</h1>
                         </div>
-                        <Drawer open={rightDrawerOpen} onOpenChange={setRightDrawerOpen} direction="right">
-                            <DrawerTrigger asChild>
-                                <Button variant="outline" size="icon">
-                                    <Menu className="h-4 w-4" />
-                                </Button>
-                            </DrawerTrigger>
-                            <DrawerContent className="max-w-sm">
-                                <DrawerHeader>
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <DrawerTitle>Right Sidebar</DrawerTitle>
-                                            <DrawerDescription>Additional information</DrawerDescription>
-                                        </div>
-                                        <DrawerClose asChild>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                                                <X className="h-4 w-4" />
-                                            </Button>
-                                        </DrawerClose>
-                                    </div>
-                                </DrawerHeader>
-                                <div className="p-4 overflow-y-auto">
-                                    <RightSidebarContent />
-                                </div>
-                            </DrawerContent>
-                        </Drawer>
+                        
+                        <Button 
+                            variant="outline" 
+                            size="icon"
+                            onClick={() => setRightDrawerOpen(true)}
+                        >
+                            <Users className="h-4 w-4" />
+                        </Button>
                     </div>
+                    
                     {/* Desktop: Jukebox text above audio player */}
                     <div className="hidden lg:flex justify-center mb-2">
                         <h1 className="text-xl font-bold">Jukebox</h1>
                     </div>
+                    
                     <AudioPlayerContainer />
                 </div>
 
@@ -468,7 +531,7 @@ function Jukebox() {
                 </div>
 
                 {/* Right Sidebar - Desktop */}
-                <div className="hidden lg:block col-start-3 row-start-1 row-end-3 bg-card border rounded-lg p-4 overflow-y-auto">
+                <div className="hidden lg:block col-start-3 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden">
                     <RightSidebarContent />
                 </div>
             </div>
