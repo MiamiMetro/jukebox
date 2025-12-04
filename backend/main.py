@@ -1,12 +1,121 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import json, time
 import os
+import asyncio
 from yt_api import router as youtube_router
 from songs_api import router as songs_router
 
-app = FastAPI()
+clients = set()
+
+queue = [
+    {
+        "id": "1",
+        "title": "What Did I Miss",
+        "artist": "Drake",
+        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
+        "artwork": "https://img.youtube.com/vi/weU76DGHKU0/maxresdefault.jpg",
+        "source": "html5",
+        "duration": 242.0  # Duration in seconds (3 minutes)
+    },
+    {
+        "id": "2",
+        "title": "Nokia",
+        "artist": "Drake",
+        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/Drake_-_NOKIA_Official_Music_Video_6208fcb9.mp3",
+        "artwork": "https://i.ytimg.com/vi/8ekJMC8OtGU/maxresdefault.jpg",
+        "source": "html5",
+        "duration": 264.0  # Duration in seconds (4 minutes)
+    },
+    {
+        "id": "2",
+        "title": "Timeless",
+        "artist": "The Weeknd",
+        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/yt-5EpyN_6dqyk.mp3",
+        "artwork": "https://i.ytimg.com/vi/5EpyN_6dqyk/maxresdefault.jpg",
+        "source": "html5",
+        "duration": 256.0  # Duration in seconds (4 minutes)
+    },
+]
+
+# global playback state
+state = {
+    "track": queue[0],
+    "is_playing": False,
+    "start_time": None,  # when the track started (server time)
+    "position": 0.0,     # where we paused
+    "duration": queue[0].get("duration") if queue[0].get("duration") else None,  # track duration in seconds
+}
+
+async def broadcast(data: dict):
+    dead = []
+    for c in list(clients):
+        try:
+            await c.send_json(data)
+        except Exception:
+            dead.append(c)
+    for c in dead:
+        try:
+            await c.close()
+        except Exception:
+            pass
+        clients.discard(c)
+
+async def advance_to_next_track():
+    """Helper function to advance to the next track in the queue"""
+    now = time.time()
+    try:
+        # Try to find current track in queue by ID
+        current_index = next((i for i, t in enumerate(queue) if t.get("id") == state["track"].get("id")), -1)
+        if current_index >= 0:
+            next_index = (current_index + 1) % len(queue)
+            next_track = queue[next_index]
+        else:
+            # Current track not in queue, go to first track
+            next_track = queue[0]
+    except (IndexError, ValueError):
+        # Fallback to first track if queue is empty or error
+        next_track = queue[0] if queue else state["track"]
+    
+    state["track"] = next_track
+    state["duration"] = next_track.get("duration")
+    state["position"] = 0.0
+    state["is_playing"] = False
+    state["start_time"] = None
+    await broadcast({
+        "type": "next-track",
+        "payload": {"track": state["track"]},
+        "server_time": now
+    })
+
+async def check_track_end():
+    """Background task that periodically checks if the current track has ended"""
+    while True:
+        await asyncio.sleep(1)  # Check every second
+        
+        if state["is_playing"] and state["start_time"] is not None and state["duration"] is not None:
+            now = time.time()
+            current_position = now - state["start_time"]
+            
+            # Check if track has ended (with small buffer to account for timing)
+            if current_position >= state["duration"]:
+                # Track has ended - advance to next track
+                print(f"Track ended: {state['track'].get('title', 'Unknown')}, advancing to next track")
+                await advance_to_next_track()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    # Startup
+    asyncio.create_task(check_track_end())
+    print("Track end monitoring started")
+    yield
+    # Shutdown (if needed in the future)
+    pass
+
+app = FastAPI(lifespan=lifespan)
 
 # Configure CORS
 app.add_middleware(
@@ -23,49 +132,6 @@ app.include_router(songs_router)
 
 # Mount static files (HTML files in the backend directory)
 app.mount("/static", StaticFiles(directory=os.path.dirname(__file__)), name="static")
-
-clients = set()
-
-queue = [
-    {
-        "id": "1",
-        "title": "What Did I Miss",
-        "artist": "Drake",
-        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
-        "artwork": "https://img.youtube.com/vi/weU76DGHKU0/maxresdefault.jpg",
-        "source": "html5"
-    },
-    {
-        "id": "2",
-        "title": "Nokia",
-        "artist": "Drake",
-        "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/Drake_-_NOKIA_Official_Music_Video_6208fcb9.mp3",
-        "artwork": "https://i.ytimg.com/vi/8ekJMC8OtGU/maxresdefault.jpg",
-        "source": "html5"
-    }
-]
-
-# global playback state
-state = {
-    "track": queue[0],
-    "is_playing": False,
-    "start_time": None,  # when the track started (server time)
-    "position": 0.0,     # where we paused
-}
-
-async def broadcast(data: dict):
-    dead = []
-    for c in list(clients):
-        try:
-            await c.send_json(data)
-        except Exception:
-            dead.append(c)
-    for c in dead:
-        try:
-            await c.close()
-        except Exception:
-            pass
-        clients.discard(c)
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -138,6 +204,7 @@ async def ws_endpoint(ws: WebSocket):
                         "artwork": "https://picsum.photos/id/842/1500/1500",
                         "source": "youtube" if "youtube.com" in track_data or "youtu.be" in track_data else "html5"
                     }
+                    state["duration"] = None  # Duration unknown for URL-only tracks
                 else:
                     # Full track object provided
                     state["track"] = {
@@ -146,8 +213,10 @@ async def ws_endpoint(ws: WebSocket):
                         "artist": track_data.get("artist", "Unknown Artist"),
                         "url": track_data.get("url", ""),
                         "artwork": track_data.get("artwork"),
-                        "source": track_data.get("source", "html5")
+                        "source": track_data.get("source", "html5"),
+                        "duration": track_data.get("duration")
                     }
+                    state["duration"] = track_data.get("duration")
                 
                 state["position"] = 0.0
                 state["is_playing"] = False
@@ -159,16 +228,7 @@ async def ws_endpoint(ws: WebSocket):
 
             elif t == "next-track":
                 # round robin to the next track
-                now = time.time()
-                state["track"] = queue[(queue.index(state["track"]) + 1) % len(queue)]
-                state["position"] = 0.0
-                state["is_playing"] = False
-                state["start_time"] = None
-                await broadcast({
-                    "type": "next-track",
-                    "payload": {"track": state["track"]},
-                    "server_time": now
-                })
+                await advance_to_next_track()
 
             elif t == "ping":
                 await ws.send_json({
@@ -178,11 +238,13 @@ async def ws_endpoint(ws: WebSocket):
 
             elif t == "get_state":
                 # Send current state to requesting client
-                state["position"] = time.time() - state["start_time"]
+                now = time.time()
+                if state["is_playing"] and state["start_time"] is not None:
+                    state["position"] = now - state["start_time"]
                 await ws.send_json({
                     "type": "state_sync",
                     "payload": state,
-                    "server_time": time.time()
+                    "server_time": now
                 })
 
     except WebSocketDisconnect:
