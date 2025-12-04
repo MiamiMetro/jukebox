@@ -3,13 +3,15 @@ import type { Track } from "./types/audio-player";
 import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { StatefulDrawer } from "./components/ui/stateful-drawer";
-import { ListMusic, Users } from "lucide-react";
+import { QueueSearch } from "./components/queue-search";
+import { ListMusic, Users, X } from "lucide-react";
 
 // Shared audio player state and websocket logic
 let sharedControls: PlayerControls | null = null;
 let sharedMode: "host" | "listener" = "host";
 let sharedVariant: "full" | "mini" = "full";
 let sharedWs: WebSocket | null = null;
+let sharedTrack: Track | null = null;
 const trackModeRef = { current: "html5" as "html5" | "youtube" };
 
 // Callbacks to update shared state
@@ -39,6 +41,7 @@ function AudioPlayerContainer() {
         sharedMode = mode;
         sharedVariant = variant;
         sharedWs = ws.current || null;
+        sharedTrack = track;
     }, [track, controls, mode, variant, trackMode]);
 
     const connectToServer = () => {
@@ -363,98 +366,101 @@ function MiddleBottom() {
 }
 
 // Left Sidebar Content Component - Always mounted, state preserved
-function LeftSidebarContent() {
-    const [count, setCount] = useState(0);
-    const [inputValue, setInputValue] = useState("");
+function LeftSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean; onClose?: () => void }) {
+    const [currentTrackId, setCurrentTrackId] = useState<string | null>(sharedTrack?.id || null);
+    
+    // Sync with shared track
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (sharedTrack?.id !== currentTrackId) {
+                setCurrentTrackId(sharedTrack?.id || null);
+            }
+        }, 100);
+        return () => clearInterval(interval);
+    }, [currentTrackId]);
     
     return (
-        <div className="h-full overflow-y-auto p-4">
-            <h2 className="text-xl font-semibold mb-4">Left Sidebar</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-                This content stays mounted and preserves state when the drawer closes.
-            </p>
-            
-            {/* Example state that will be preserved */}
-            <div className="space-y-4">
-                <div>
-                    <label className="text-sm font-medium mb-2 block">Test Input (state preserved)</label>
-                    <input
-                        type="text"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        placeholder="Type something..."
-                        className="w-full px-3 py-2 border rounded-md"
-                    />
-                </div>
-                
-                <div>
-                    <label className="text-sm font-medium mb-2 block">Counter (state preserved)</label>
-                    <div className="flex items-center gap-2">
-                        <Button onClick={() => setCount(count - 1)} variant="outline" size="sm">
-                            -
-                        </Button>
-                        <span className="text-lg font-semibold min-w-[3rem] text-center">{count}</span>
-                        <Button onClick={() => setCount(count + 1)} variant="outline" size="sm">
-                            +
-                        </Button>
-                    </div>
-                </div>
-            </div>
-            
-            {/* Left sidebar content can go here */}
+        <div className="h-full flex flex-col min-h-0">
+            <QueueSearch 
+                mode={sharedMode || "host"} 
+                isDrawer={isDrawer}
+                onClose={onClose}
+                currentTrackId={currentTrackId}
+            />
         </div>
     );
 }
 
 // Right Sidebar Content Component - Always mounted, state preserved
-function RightSidebarContent() {
+function RightSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean; onClose?: () => void }) {
     const [selectedTab, setSelectedTab] = useState("info");
     const [notes, setNotes] = useState("");
     
     return (
-        <div className="h-full overflow-y-auto p-4">
-            <h2 className="text-xl font-semibold mb-4">Right Sidebar</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-                This content stays mounted and preserves state when the drawer closes.
-            </p>
-            
-            {/* Example state that will be preserved */}
-            <div className="space-y-4">
-                <div>
-                    <label className="text-sm font-medium mb-2 block">Tabs (state preserved)</label>
-                    <div className="flex gap-2">
-                        <Button
-                            variant={selectedTab === "info" ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setSelectedTab("info")}
-                        >
-                            Info
-                        </Button>
-                        <Button
-                            variant={selectedTab === "notes" ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setSelectedTab("notes")}
-                        >
-                            Notes
-                        </Button>
+        <div className="h-full flex flex-col min-h-0">
+            {/* Header */}
+            <div className="p-4 border-b">
+                <div className="flex items-start justify-between mb-2">
+                    <div>
+                        <h2 className="text-2xl font-bold">Right Sidebar</h2>
+                        <p className="text-sm text-muted-foreground mt-1">
+                            Additional information
+                        </p>
                     </div>
-                    <div className="mt-2 p-2 bg-muted rounded">
-                        {selectedTab === "info" ? "Information tab selected" : "Notes tab selected"}
-                    </div>
-                </div>
-                
-                <div>
-                    <label className="text-sm font-medium mb-2 block">Notes (state preserved)</label>
-                    <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        placeholder="Write notes here..."
-                        className="w-full px-3 py-2 border rounded-md min-h-[100px]"
-                    />
+                    {/* Close button - only show in drawer mode */}
+                    {isDrawer && onClose && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={onClose}
+                        >
+                            <X className="h-4 w-4" />
+                        </Button>
+                    )}
                 </div>
             </div>
             
-            {/* Right sidebar content can go here */}
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+                {/* Example state that will be preserved */}
+                <div className="space-y-4">
+                    <div>
+                        <label className="text-sm font-medium mb-2 block">Tabs (state preserved)</label>
+                        <div className="flex gap-2">
+                            <Button
+                                variant={selectedTab === "info" ? "default" : "outline"}
+                                size="sm"
+                                onClick={() => setSelectedTab("info")}
+                            >
+                                Info
+                            </Button>
+                            <Button
+                                variant={selectedTab === "notes" ? "default" : "outline"}
+                                size="sm"
+                                onClick={() => setSelectedTab("notes")}
+                            >
+                                Notes
+                            </Button>
+                        </div>
+                        <div className="mt-2 p-2 bg-muted rounded">
+                            {selectedTab === "info" ? "Information tab selected" : "Notes tab selected"}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label className="text-sm font-medium mb-2 block">Notes (state preserved)</label>
+                        <textarea
+                            value={notes}
+                            onChange={(e) => setNotes(e.target.value)}
+                            placeholder="Write notes here..."
+                            className="w-full px-3 py-2 border rounded-md min-h-[100px]"
+                        />
+                    </div>
+                </div>
+                
+                {/* Right sidebar content can go here */}
+            </div>
         </div>
     );
 }
@@ -470,25 +476,21 @@ function Jukebox() {
                 open={leftDrawerOpen}
                 onOpenChange={setLeftDrawerOpen}
                 direction="left"
-                title="Left Sidebar"
-                description="Navigation and controls"
             >
-                <LeftSidebarContent />
+                <LeftSidebarContent isDrawer={true} onClose={() => setLeftDrawerOpen(false)} />
             </StatefulDrawer>
 
             <StatefulDrawer
                 open={rightDrawerOpen}
                 onOpenChange={setRightDrawerOpen}
                 direction="right"
-                title="Right Sidebar"
-                description="Additional information"
             >
-                <RightSidebarContent />
+                <RightSidebarContent isDrawer={true} onClose={() => setRightDrawerOpen(false)} />
             </StatefulDrawer>
 
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] grid-rows-[auto_1fr] gap-4 p-4">
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] grid-rows-[auto_1fr] gap-4 p-4 min-h-0">
                 {/* Left Sidebar - Desktop */}
-                <div className="hidden lg:block col-start-1 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden">
+                <div className="hidden lg:block col-start-1 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden flex flex-col min-h-0">
                     <LeftSidebarContent />
                 </div>
 
@@ -531,7 +533,7 @@ function Jukebox() {
                 </div>
 
                 {/* Right Sidebar - Desktop */}
-                <div className="hidden lg:block col-start-3 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden">
+                <div className="hidden lg:block col-start-3 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden flex flex-col min-h-0">
                     <RightSidebarContent />
                 </div>
             </div>
