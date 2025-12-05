@@ -386,6 +386,13 @@ function LeftSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean;
                 isDrawer={isDrawer}
                 onClose={onClose}
                 currentTrackId={currentTrackId}
+                onModeChange={(newMode) => {
+                    // Debug: Update shared mode when toggle is used
+                    if (setSharedMode) {
+                        setSharedMode(newMode);
+                    }
+                    sharedMode = newMode;
+                }}
             />
         </div>
     );

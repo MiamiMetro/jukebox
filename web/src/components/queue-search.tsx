@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/types/audio-player";
-import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play } from "lucide-react";
+import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play, Plus, Vote, CloudUpload, Youtube, Music } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 
 // Extended track type for queue items with voting
 export interface QueueItem extends Track {
@@ -24,7 +26,52 @@ interface QueueSearchProps {
     onApprove?: (itemId: string) => Promise<void> | void; // Backend approve handler
     onDelete?: (itemId: string) => Promise<void> | void; // Backend delete handler
     onReorder?: (itemId: string, direction: "up" | "down") => Promise<void> | void; // Backend reorder handler
+    onAddToQueue?: (item: QueueItem) => Promise<void> | void; // Backend add to queue handler
+    onSuggest?: (item: QueueItem) => Promise<void> | void; // Backend suggest handler
+    onModeChange?: (mode: "host" | "listener") => void; // Callback when mode changes (for debug toggle)
 }
+
+const API_BASE = "http://192.168.1.2:8000";
+
+// YouTube API functions
+const searchYouTubeAPI = async (query: string) => {
+    const response = await fetch(
+        `${API_BASE}/api/youtube/search?q=${encodeURIComponent(query)}&max_results=10`
+    );
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return response.json();
+};
+
+const downloadVideoAPI = async (videoId: string) => {
+    const response = await fetch(`${API_BASE}/api/youtube/download`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            video_id: videoId,
+            format: "bestaudio/best",
+            extract_audio: true,
+        }),
+    });
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: `HTTP error! status: ${response.status}` }));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+    }
+    return response.json();
+};
+
+const getDownloadUrlAPI = async (videoId: string) => {
+    const response = await fetch(
+        `${API_BASE}/api/youtube/download-url/${videoId}?format=bestaudio/best`
+    );
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return response.json();
+};
 
 export function QueueSearch({ 
     mode, 
@@ -37,9 +84,17 @@ export function QueueSearch({
     onApprove,
     onDelete,
     onReorder,
+    onAddToQueue,
+    onSuggest,
+    onModeChange,
 }: QueueSearchProps) {
     const [activeTab, setActiveTab] = useState<"queue" | "search">("queue");
     const [isEditMode, setIsEditMode] = useState(false);
+    const [debugMode, setDebugMode] = useState<"host" | "listener">(mode);
+    
+    // Use debug mode if onModeChange is provided, otherwise use prop mode
+    const effectiveMode = onModeChange ? debugMode : mode;
+    const [searchQuery, setSearchQuery] = useState("");
     
     // Use external queue items if provided, otherwise use mock data
     const [internalQueueItems, setInternalQueueItems] = useState<QueueItem[]>([
@@ -257,43 +312,65 @@ export function QueueSearch({
                             Manage your music queue
                         </p>
                     </div>
-                    {/* Close button - only show in drawer mode */}
-                    {isDrawer && onClose && (
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={onClose}
-                        >
-                            <X className="h-4 w-4" />
-                        </Button>
-                    )}
+                    <div className="flex items-center gap-2">
+                        {/* Debug Mode Toggle */}
+                        {onModeChange && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    const newMode = debugMode === "host" ? "listener" : "host";
+                                    setDebugMode(newMode);
+                                    onModeChange(newMode);
+                                }}
+                                className="text-xs"
+                            >
+                                {effectiveMode === "host" ? "Host" : "Listener"}
+                            </Button>
+                        )}
+                        {/* Close button - only show in drawer mode */}
+                        {isDrawer && onClose && (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={onClose}
+                            >
+                                <X className="h-4 w-4" />
+                            </Button>
+                        )}
+                    </div>
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-1 mt-4">
-                    <button
-                        onClick={() => setActiveTab("queue")}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium transition-colors border-b-2",
-                            activeTab === "queue"
-                                ? "border-foreground font-bold"
-                                : "border-transparent text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        Queue
-                    </button>
-                    <button
-                        onClick={() => setActiveTab("search")}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium transition-colors border-b-2",
-                            activeTab === "search"
-                                ? "border-foreground font-bold"
-                                : "border-transparent text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        Search
-                    </button>
+                <div className="flex items-center justify-between gap-4 mt-4">
+                    <div className="flex gap-1">
+                        <button
+                            onClick={() => setActiveTab("queue")}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium transition-colors border-b-2",
+                                activeTab === "queue"
+                                    ? "border-foreground font-bold"
+                                    : "border-transparent text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            Queue
+                        </button>
+                        <button
+                            onClick={() => setActiveTab("search")}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium transition-colors border-b-2",
+                                activeTab === "search"
+                                    ? "border-foreground font-bold"
+                                    : "border-transparent text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            Search
+                        </button>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                        {queueItems.length} {queueItems.length === 1 ? 'song' : 'songs'}
+                    </div>
                 </div>
             </div>
 
@@ -350,12 +427,32 @@ export function QueueSearch({
 
                                     {/* Card - Same for all items */}
                                     <div
+                                        onClick={() => {
+                                            if (effectiveMode === "host") {
+                                                console.log("Queue card clicked:", {
+                                                    id: item.id,
+                                                    title: item.title,
+                                                    artist: item.artist,
+                                                    url: item.url,
+                                                    source: item.source,
+                                                    duration: item.duration,
+                                                    artwork: item.artwork,
+                                                    isSuggested: item.isSuggested,
+                                                    votes: item.votes,
+                                                    userVote: item.userVote,
+                                                    isNext: item.isNext,
+                                                    isCurrentTrack,
+                                                    isNextTrack
+                                                });
+                                            }
+                                        }}
                                         className={cn(
                                             "flex items-center gap-3 p-3 rounded-lg border flex-1 transition-colors relative",
                                             item.source === "youtube" && "border-red-500",
                                             isCurrentTrack && "bg-primary/10 border-primary",
                                             isNextTrack && "bg-muted/30",
-                                            !isEditMode && "hover:bg-muted/50"
+                                            !isEditMode && "hover:bg-muted/50",
+                                            effectiveMode === "host" && "cursor-pointer"
                                         )}
                                     >
                                         {/* Now Playing / Next indicator - Top right */}
@@ -423,7 +520,7 @@ export function QueueSearch({
                                 )}
 
                                 {/* Edit mode actions (host only) - Outside card, right side */}
-                                {isEditMode && mode === "host" && (
+                                {isEditMode && effectiveMode === "host" && (
                                     <div className="flex flex-col gap-1">
                                         {item.isSuggested && (
                                             <button
@@ -450,14 +547,13 @@ export function QueueSearch({
                     </div>
                 ) : (
                     <div className="p-4">
-                        <input
-                            type="text"
-                            placeholder="Search for songs..."
-                            className="w-full px-4 py-2 border rounded-lg mb-4"
+                        <SearchTab 
+                            searchQuery={searchQuery}
+                            setSearchQuery={setSearchQuery}
+                            mode={effectiveMode}
+                            onAddToQueue={onAddToQueue}
+                            onSuggest={onSuggest}
                         />
-                        <p className="text-sm text-muted-foreground">
-                            Search functionality will be implemented here
-                        </p>
                     </div>
                 )}
             </div>
@@ -469,11 +565,605 @@ export function QueueSearch({
                         onClick={() => setIsEditMode(!isEditMode)}
                         className="w-full"
                         variant={isEditMode ? "default" : "outline"}
+                        disabled={effectiveMode !== "host"}
                     >
                         {isEditMode ? "Done Editing" : "Edit Queue"}
                     </Button>
                 )}
             </div>
+        </div>
+    );
+}
+
+// Search Tab Component
+function SearchTab({
+    searchQuery,
+    setSearchQuery,
+    mode,
+    onAddToQueue,
+    onSuggest,
+}: {
+    searchQuery: string;
+    setSearchQuery: (query: string) => void;
+    mode: "host" | "listener";
+    onAddToQueue?: (item: QueueItem) => Promise<void> | void;
+    onSuggest?: (item: QueueItem) => Promise<void> | void;
+}) {
+    const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+    const [selectedSources, setSelectedSources] = useState<Set<"youtube" | "spotify" | "soundcloud">>(new Set(["youtube", "spotify", "soundcloud"]));
+    const [isHTML5Mode, setIsHTML5Mode] = useState(false);
+    const [html5Url, setHtml5Url] = useState("");
+    const [html5Title, setHtml5Title] = useState("");
+    const [html5Artist, setHtml5Artist] = useState("");
+    const [html5Duration, setHtml5Duration] = useState<number | null>(null);
+    const [isLoadingDuration, setIsLoadingDuration] = useState(false);
+    const [isUrlValid, setIsUrlValid] = useState<boolean | null>(null);
+    
+    const { data: searchResults = [], isLoading: isSearching, error: searchError, refetch: refetchSearch } = useQuery({
+        queryKey: ["youtube-search", searchQuery],
+        queryFn: () => searchYouTubeAPI(searchQuery),
+        enabled: false, // Manual trigger
+        retry: 1,
+    });
+    
+    const toggleSource = (source: "youtube" | "spotify" | "soundcloud") => {
+        setSelectedSources(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(source)) {
+                // Allow deselecting any source
+                newSet.delete(source);
+            } else {
+                // Add the source
+                newSet.add(source);
+            }
+            return newSet;
+        });
+    };
+
+    const downloadMutation = useMutation({
+        mutationFn: downloadVideoAPI,
+    });
+
+    const handleSearch = () => {
+        if (!searchQuery.trim()) return;
+        // TODO: When backend is ready, pass selectedSources as query parameters
+        // Example: const sources = Array.from(selectedSources).join(',');
+        // Then include in API call: searchAPI(searchQuery, { sources })
+        refetchSearch();
+    };
+
+    // Validate URL format
+    const isValidUrl = (url: string): boolean => {
+        try {
+            const urlObj = new URL(url);
+            return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+        } catch {
+            return false;
+        }
+    };
+
+    // Fetch duration for HTML5 URL
+    const fetchHTML5Duration = async (url: string) => {
+        if (!url.trim()) {
+            setHtml5Duration(null);
+            setIsUrlValid(null);
+            return;
+        }
+
+        // First check if URL format is valid
+        const urlFormatValid = isValidUrl(url);
+        if (!urlFormatValid) {
+            setHtml5Duration(null);
+            setIsUrlValid(false);
+            setIsLoadingDuration(false);
+            return;
+        }
+
+        setIsLoadingDuration(true);
+        setIsUrlValid(null); // Reset validity while checking
+        try {
+            const audio = new Audio(url);
+            
+            return new Promise<void>((resolve) => {
+                const timeout = setTimeout(() => {
+                    setHtml5Duration(null);
+                    setIsUrlValid(false);
+                    setIsLoadingDuration(false);
+                    resolve();
+                }, 5000);
+
+                const onLoadedMetadata = () => {
+                    clearTimeout(timeout);
+                    const duration = audio.duration;
+                    if (isFinite(duration) && duration > 0) {
+                        setHtml5Duration(Math.floor(duration));
+                        setIsUrlValid(true);
+                    } else {
+                        setHtml5Duration(null);
+                        setIsUrlValid(false);
+                    }
+                    setIsLoadingDuration(false);
+                    audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+                    audio.removeEventListener('error', onError);
+                    resolve();
+                };
+
+                const onError = () => {
+                    clearTimeout(timeout);
+                    setHtml5Duration(null);
+                    setIsUrlValid(false);
+                    setIsLoadingDuration(false);
+                    audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+                    audio.removeEventListener('error', onError);
+                    resolve();
+                };
+
+                audio.addEventListener('loadedmetadata', onLoadedMetadata);
+                audio.addEventListener('error', onError);
+            });
+        } catch (error) {
+            setHtml5Duration(null);
+            setIsUrlValid(false);
+            setIsLoadingDuration(false);
+        }
+    };
+
+    // Debounce duration fetch when URL changes
+    const durationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => {
+        if (durationTimeoutRef.current) {
+            clearTimeout(durationTimeoutRef.current);
+        }
+
+        if (!html5Url.trim()) {
+            setHtml5Duration(null);
+            setIsUrlValid(null);
+            setIsLoadingDuration(false);
+            return;
+        }
+
+        durationTimeoutRef.current = setTimeout(() => {
+            fetchHTML5Duration(html5Url);
+        }, 500);
+
+        return () => {
+            if (durationTimeoutRef.current) {
+                clearTimeout(durationTimeoutRef.current);
+            }
+        };
+    }, [html5Url]);
+
+
+    const handleDownloadAndAdd = async (result: any) => {
+        try {
+            const downloadResult = await downloadMutation.mutateAsync(result.id);
+            
+            const queueItem: QueueItem = {
+                id: result.id,
+                title: downloadResult.title || result.title,
+                artist: result.channel || "Unknown Artist",
+                url: downloadResult.url,
+                source: "html5", // Downloaded as HTML5
+                duration: downloadResult.duration || result.duration,
+                artwork: result.thumbnail,
+            };
+
+            if (onAddToQueue) {
+                await onAddToQueue(queueItem);
+            }
+        } catch (error) {
+            console.error("Download and add failed:", error);
+        }
+    };
+
+    const handleAddDirect = async (result: any) => {
+        try {
+            const urlData = await getDownloadUrlAPI(result.id);
+            
+            const queueItem: QueueItem = {
+                id: result.id,
+                title: result.title,
+                artist: result.channel || "Unknown Artist",
+                url: urlData.url,
+                source: "youtube", // Direct YouTube stream
+                duration: result.duration,
+                artwork: result.thumbnail,
+            };
+
+            if (onAddToQueue) {
+                await onAddToQueue(queueItem);
+            }
+        } catch (error) {
+            console.error("Add direct failed:", error);
+        }
+    };
+
+    const handleSuggestYouTube = async (result: any) => {
+        try {
+            const urlData = await getDownloadUrlAPI(result.id);
+            
+            const queueItem: QueueItem = {
+                id: result.id,
+                title: result.title,
+                artist: result.channel || "Unknown Artist",
+                url: urlData.url,
+                source: "youtube",
+                duration: result.duration,
+                artwork: result.thumbnail,
+                isSuggested: true,
+                votes: 0,
+                userVote: null,
+            };
+
+            if (onSuggest) {
+                await onSuggest(queueItem);
+            }
+        } catch (error) {
+            console.error("Suggest YouTube failed:", error);
+        }
+    };
+
+    const handleSuggestHTML5 = async (result: any) => {
+        try {
+            const downloadResult = await downloadMutation.mutateAsync(result.id);
+            
+            const queueItem: QueueItem = {
+                id: result.id,
+                title: downloadResult.title || result.title,
+                artist: result.channel || "Unknown Artist",
+                url: downloadResult.url,
+                source: "html5",
+                duration: downloadResult.duration || result.duration,
+                artwork: result.thumbnail,
+                isSuggested: true,
+                votes: 0,
+                userVote: null,
+            };
+
+            if (onSuggest) {
+                await onSuggest(queueItem);
+            }
+        } catch (error) {
+            console.error("Suggest HTML5 failed:", error);
+        }
+    };
+
+    const handleAddHTML5Direct = async () => {
+        if (!html5Url.trim()) return;
+        
+        const queueItem: QueueItem = {
+            id: `html5-${Date.now()}`,
+            title: html5Title.trim() || "Unknown Title",
+            artist: html5Artist.trim() || "Unknown Artist",
+            url: html5Url.trim(),
+            source: "html5",
+            artwork: undefined,
+        };
+
+        if (onAddToQueue) {
+            await onAddToQueue(queueItem);
+            // Clear form
+            setHtml5Url("");
+            setHtml5Title("");
+            setHtml5Artist("");
+        }
+    };
+
+    const handleSuggestHTML5Direct = async () => {
+        if (!html5Url.trim()) return;
+        
+        const queueItem: QueueItem = {
+            id: `html5-${Date.now()}`,
+            title: html5Title.trim() || "Unknown Title",
+            artist: html5Artist.trim() || "Unknown Artist",
+            url: html5Url.trim(),
+            source: "html5",
+            artwork: undefined,
+            isSuggested: true,
+            votes: 0,
+            userVote: null,
+        };
+
+        if (onSuggest) {
+            await onSuggest(queueItem);
+            // Clear form
+            setHtml5Url("");
+            setHtml5Title("");
+            setHtml5Artist("");
+        }
+    };
+
+    const formatDuration = (seconds?: number): string => {
+        if (!seconds) return "0:00";
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, "0")}`;
+    };
+
+    return (
+        <div className="space-y-4 min-w-0">
+            {/* Toggle buttons - HTML5 with spacing, then others */}
+            <div className="flex justify-end items-center gap-3">
+                {/* HTML5 toggle - separated with more space */}
+                <button
+                    onClick={() => setIsHTML5Mode(!isHTML5Mode)}
+                    className={cn(
+                        "p-1.5 rounded border transition-colors",
+                        isHTML5Mode
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background border-border hover:bg-muted"
+                    )}
+                    title="HTML5"
+                >
+                    <CloudUpload className="h-4 w-4" />
+                </button>
+                
+                {/* Source toggles */}
+                <div className="flex gap-1">
+                    <button
+                        onClick={() => toggleSource("youtube")}
+                        disabled={isHTML5Mode}
+                        className={cn(
+                            "p-1.5 rounded border transition-colors",
+                            selectedSources.has("youtube")
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-background border-border hover:bg-muted",
+                            isHTML5Mode && "opacity-50 cursor-not-allowed"
+                        )}
+                        title="YouTube"
+                    >
+                        <Youtube className="h-4 w-4" />
+                    </button>
+                    <button
+                        onClick={() => toggleSource("spotify")}
+                        disabled={isHTML5Mode}
+                        className={cn(
+                            "p-1.5 rounded border transition-colors",
+                            selectedSources.has("spotify")
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-background border-border hover:bg-muted",
+                            isHTML5Mode && "opacity-50 cursor-not-allowed"
+                        )}
+                        title="Spotify"
+                    >
+                        <Music className="h-4 w-4" />
+                    </button>
+                    <button
+                        onClick={() => toggleSource("soundcloud")}
+                        disabled={isHTML5Mode}
+                        className={cn(
+                            "p-1.5 rounded border transition-colors",
+                            selectedSources.has("soundcloud")
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-background border-border hover:bg-muted",
+                            isHTML5Mode && "opacity-50 cursor-not-allowed"
+                        )}
+                        title="SoundCloud"
+                    >
+                        <Music className="h-4 w-4" />
+                    </button>
+                </div>
+            </div>
+            
+            {/* HTML5 Mode: Manual input form */}
+            {isHTML5Mode ? (
+                <div className="space-y-3">
+                    <div>
+                        <Input
+                            type="text"
+                            placeholder="Source URL"
+                            value={html5Url}
+                            onChange={(e) => setHtml5Url(e.target.value)}
+                            className="w-full"
+                        />
+                        {isLoadingDuration && (
+                            <p className="text-xs text-muted-foreground mt-1">Loading duration...</p>
+                        )}
+                        {html5Duration !== null && !isLoadingDuration && isUrlValid && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Duration: {formatDuration(html5Duration)}
+                            </p>
+                        )}
+                        {isUrlValid === false && !isLoadingDuration && (
+                            <p className="text-xs text-destructive mt-1">Invalid URL</p>
+                        )}
+                    </div>
+                    <Input
+                        type="text"
+                        placeholder="Track Name"
+                        value={html5Title}
+                        onChange={(e) => setHtml5Title(e.target.value)}
+                        className="w-full"
+                    />
+                    <Input
+                        type="text"
+                        placeholder="Track Artist"
+                        value={html5Artist}
+                        onChange={(e) => setHtml5Artist(e.target.value)}
+                        className="w-full"
+                    />
+                    <div className="flex flex-col gap-2">
+                        {mode === "host" && (
+                            <Button
+                                onClick={handleAddHTML5Direct}
+                                disabled={!html5Url.trim()}
+                                className="w-full"
+                            >
+                                <Plus className="h-4 w-4 mr-2" />
+                                Add to Queue
+                            </Button>
+                        )}
+                        <Button
+                            onClick={handleSuggestHTML5Direct}
+                            disabled={!html5Url.trim()}
+                            variant="outline"
+                            className="w-full"
+                        >
+                            <Vote className="h-4 w-4 mr-2" />
+                            Open for Vote
+                        </Button>
+                    </div>
+                </div>
+            ) : (
+                /* Search input and button - normal mode */
+                <>
+                    <div className="flex gap-2">
+                        <Input
+                            type="text"
+                            placeholder="Search for songs..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onKeyPress={(e) => e.key === "Enter" && handleSearch()}
+                            className="flex-1"
+                        />
+                        <Button onClick={handleSearch} disabled={isSearching}>
+                            {isSearching ? "Searching..." : "Search"}
+                        </Button>
+                    </div>
+                    
+                    {/* Search Results - only show when not in HTML5 mode */}
+                    {searchError && (
+                        <div className="p-2 bg-red-100 text-red-700 rounded text-sm">
+                            Error: {(searchError as Error).message}
+                        </div>
+                    )}
+
+                    {searchResults.length > 0 && (
+                        <div className="space-y-2">
+                            {searchResults.map((result: any) => (
+                                <div
+                                    key={result.id}
+                                    className="flex items-center gap-2 min-w-0 w-full"
+                                >
+                                    {/* Card - Same design as queue */}
+                                    <div className="flex items-center gap-3 p-3 rounded-lg border flex-1 min-w-0 transition-colors hover:bg-muted/50">
+                                        {result.thumbnail && (
+                                            <img
+                                                src={result.thumbnail}
+                                                alt={result.title}
+                                                className="w-12 h-12 rounded object-cover flex-shrink-0"
+                                            />
+                                        )}
+                                        <div className="flex-1 min-w-0 overflow-hidden">
+                                            <div 
+                                                className="font-semibold truncate" 
+                                                title={result.title}
+                                            >
+                                                {result.title}
+                                            </div>
+                                            <div 
+                                                className="text-sm text-muted-foreground truncate"
+                                                title={result.channel}
+                                            >
+                                                {result.channel}
+                                            </div>
+                                            <div className="text-sm text-muted-foreground">
+                                                {formatDuration(result.duration)}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Buttons outside card */}
+                                    <div className="flex flex-col gap-1 flex-shrink-0 relative">
+                                        {/* Host-only: Add button with dropdown */}
+                                        {mode === "host" && (
+                                            <div className="relative">
+                                                <Button
+                                                    size="icon"
+                                                    variant="outline"
+                                                    className="h-8 w-8"
+                                                    onClick={() => setOpenMenuId(openMenuId === result.id ? null : result.id)}
+                                                >
+                                                    <Plus className="h-4 w-4" />
+                                                </Button>
+                                                
+                                                {/* Dropdown menu */}
+                                                {openMenuId === result.id && (
+                                                    <>
+                                                        <div 
+                                                            className="fixed inset-0 z-10" 
+                                                            onClick={() => setOpenMenuId(null)}
+                                                        />
+                                                        <div className="absolute right-0 top-10 z-20 bg-background border rounded-lg shadow-lg min-w-[120px]">
+                                                            <button
+                                                                onClick={() => {
+                                                                    handleAddDirect(result);
+                                                                    setOpenMenuId(null);
+                                                                }}
+                                                                className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 rounded-t-lg"
+                                                            >
+                                                                <Youtube className="h-4 w-4" />
+                                                                YouTube
+                                                            </button>
+                                                            <button
+                                                                onClick={() => {
+                                                                    handleDownloadAndAdd(result);
+                                                                    setOpenMenuId(null);
+                                                                }}
+                                                                disabled={downloadMutation.isPending}
+                                                                className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 rounded-b-lg disabled:opacity-50"
+                                                            >
+                                                                <CloudUpload className="h-4 w-4" />
+                                                                HTML5
+                                                            </button>
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
+                                        
+                                        {/* Open for Vote button with dropdown - Available for both host and listener */}
+                                        <div className="relative">
+                                            <Button
+                                                size="icon"
+                                                variant="outline"
+                                                className="h-8 w-8"
+                                                onClick={() => setOpenMenuId(openMenuId === `vote-${result.id}` ? null : `vote-${result.id}`)}
+                                                title="Open for Vote"
+                                            >
+                                                <Vote className="h-4 w-4" />
+                                            </Button>
+                                            
+                                            {/* Dropdown menu */}
+                                            {openMenuId === `vote-${result.id}` && (
+                                                <>
+                                                    <div 
+                                                        className="fixed inset-0 z-10" 
+                                                        onClick={() => setOpenMenuId(null)}
+                                                    />
+                                                    <div className="absolute right-0 top-10 z-20 bg-background border rounded-lg shadow-lg min-w-[120px]">
+                                                        <button
+                                                            onClick={() => {
+                                                                handleSuggestYouTube(result);
+                                                                setOpenMenuId(null);
+                                                            }}
+                                                            className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 rounded-t-lg"
+                                                        >
+                                                            <Youtube className="h-4 w-4" />
+                                                            YouTube
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                handleSuggestHTML5(result);
+                                                                setOpenMenuId(null);
+                                                            }}
+                                                            disabled={downloadMutation.isPending}
+                                                            className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 rounded-b-lg disabled:opacity-50"
+                                                        >
+                                                            <CloudUpload className="h-4 w-4" />
+                                                            HTML5
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </>
+            )}
         </div>
     );
 }
