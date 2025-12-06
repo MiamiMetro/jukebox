@@ -1,11 +1,11 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import json, time
 import os
 import asyncio
-from yt_api import router as youtube_router
+from yt_api import router as youtube_router, download_queue, active_downloads_per_ip, ensure_workers_started
 from songs_api import router as songs_router
 
 clients = set()
@@ -18,7 +18,7 @@ queue = [
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/DRAKE_-_WHAT_DID_I_MISS_816d7cbb.mp3",
         "artwork": "https://img.youtube.com/vi/weU76DGHKU0/maxresdefault.jpg",
         "source": "html5",
-        "duration": 242.0
+        "duration": 241.5
     },
     {
         "id": "2",
@@ -27,7 +27,7 @@ queue = [
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/Drake_-_NOKIA_Official_Music_Video_6208fcb9.mp3",
         "artwork": "https://i.ytimg.com/vi/8ekJMC8OtGU/maxresdefault.jpg",
         "source": "html5",
-        "duration": 264.0
+        "duration": 263.5
     },
     {
         "id": "3",
@@ -36,7 +36,7 @@ queue = [
         "url": "https://juke.bgocumlu.workers.dev/jukebox-tracks/yt-5EpyN_6dqyk.mp3",
         "artwork": "https://i.ytimg.com/vi/5EpyN_6dqyk/maxresdefault.jpg",
         "source": "html5",
-        "duration": 255.0 
+        "duration": 254.5
     },
 ]
 
@@ -62,6 +62,77 @@ async def broadcast(data: dict):
         except Exception:
             pass
         clients.discard(c)
+
+async def start_pending_download(queue_item_id: str, client_ip: str, video_id: str):
+    """Start download for a pending queue item"""
+    from yt_api import download_queue, active_downloads_per_ip
+    
+    try:
+        # Mark IP as downloading
+        active_downloads_per_ip[client_ip] = queue_item_id
+        
+        # Ensure workers are started
+        ensure_workers_started()
+        
+        # Add to download queue
+        task_id = await download_queue.add_task(video_id, "bestaudio/best")
+        
+        # Wait for download to complete
+        task = download_queue.tasks.get(task_id)
+        if task:
+            try:
+                result = await asyncio.wait_for(task.future, timeout=600.0)
+                
+                # Update the queue item with download results
+                for item in queue:
+                    if item.get("id") == queue_item_id:
+                        item["url"] = result.get("url", "")
+                        # Update artwork if available
+                        if result.get("artwork"):
+                            item["artwork"] = result.get("artwork")
+                        duration = result.get("duration")
+                        if duration:
+                            item["duration"] = max(1, duration - 1.25)  # Duration - 1.25 seconds for buffer
+                        item["isPending"] = False  # Mark as completed
+                        # Remove video_id as it's no longer needed
+                        if "video_id" in item:
+                            del item["video_id"]
+                        break
+                
+                # Broadcast updated queue
+                await broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": queue},
+                    "server_time": time.time()
+                })
+            except asyncio.TimeoutError:
+                # Download timed out - mark as failed
+                for item in queue:
+                    if item.get("id") == queue_item_id:
+                        item["isPending"] = False
+                        item["url"] = ""  # Clear URL to indicate failure
+                        break
+                await broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": queue},
+                    "server_time": time.time()
+                })
+            except Exception as e:
+                # Download failed - mark as failed
+                for item in queue:
+                    if item.get("id") == queue_item_id:
+                        item["isPending"] = False
+                        item["url"] = ""  # Clear URL to indicate failure
+                        break
+                await broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": queue},
+                    "server_time": time.time()
+                })
+    finally:
+        # Remove IP from active downloads
+        if client_ip in active_downloads_per_ip:
+            del active_downloads_per_ip[client_ip]
 
 async def advance_to_next_track():
     """Helper function to advance to the next track in the queue"""
@@ -133,11 +204,18 @@ app.include_router(songs_router)
 # Mount static files (HTML files in the backend directory)
 app.mount("/static", StaticFiles(directory=os.path.dirname(__file__)), name="static")
 
+# Store client IP per WebSocket connection
+client_ips = {}
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     clients.add(ws)
-    print("Client connected")
+    
+    # Get and store client IP
+    client_ip = ws.client.host if hasattr(ws, 'client') and ws.client else "unknown"
+    client_ips[ws] = client_ip
+    print(f"Client connected from {client_ip}")
 
     # send current state when someone joins
     await ws.send_json({
@@ -157,6 +235,9 @@ async def ws_endpoint(ws: WebSocket):
         while True:
             data = await ws.receive_json()
             t = data.get("type")
+            
+            # Get client IP for this connection
+            current_client_ip = client_ips.get(ws, "unknown")
 
             if t == "play":
                 # set authoritative start time
@@ -357,8 +438,52 @@ async def ws_endpoint(ws: WebSocket):
                         "server_time": now
                     })
 
+            elif t == "add_pending_download":
+                # Add pending download item to queue, then start download
+                now = time.time()
+                item_data = data.get("payload", {}).get("item", {})
+                client_ip = current_client_ip
+                
+                if item_data:
+                    # Check if IP already has an active download
+                    if client_ip in active_downloads_per_ip:
+                        await ws.send_json({
+                            "type": "error",
+                            "payload": {"message": "You already have a download in progress. Please wait for it to complete."},
+                            "server_time": now
+                        })
+                        continue
+                    
+                    # Create pending queue item
+                    queue_item = {
+                        "id": item_data.get("id", f"pending-{time.time()}"),
+                        "title": item_data.get("title", "Unknown"),
+                        "artist": item_data.get("artist", "Unknown Artist"),
+                        "url": "",  # Will be set when download completes
+                        "artwork": item_data.get("artwork"),
+                        "source": "html5",
+                        "duration": item_data.get("duration"),
+                        "isPending": True,  # Mark as pending
+                        "video_id": item_data.get("video_id"),  # Store video ID for download
+                    }
+                    
+                    # Add to queue
+                    queue.append(queue_item)
+                    
+                    # Broadcast updated queue to all clients
+                    await broadcast({
+                        "type": "queue_sync",
+                        "payload": {"queue": queue},
+                        "server_time": now
+                    })
+                    
+                    # Start download in background
+                    asyncio.create_task(start_pending_download(queue_item["id"], client_ip, item_data.get("video_id")))
+
     except WebSocketDisconnect:
         clients.remove(ws)
+        if ws in client_ips:
+            del client_ips[ws]
         print("Client disconnected")
 
 if __name__ == "__main__":

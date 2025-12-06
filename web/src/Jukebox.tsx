@@ -167,6 +167,8 @@ function AudioPlayerContainer() {
                     isSuggested: item.isSuggested || false,
                     votes: item.votes || 0,
                     userVote: item.userVote || null,
+                    isPending: item.isPending || false,
+                    video_id: item.video_id,
                 }));
                 setQueue(queueItems);
             } else if (data.type === "next-track") {

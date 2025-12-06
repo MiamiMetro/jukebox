@@ -12,6 +12,8 @@ export interface QueueItem extends Track {
     votes?: number;
     userVote?: "up" | "down" | null;
     isNext?: boolean; // Manual flag for "Next" indicator
+    isPending?: boolean; // Item is pending download
+    video_id?: string; // Video ID for pending downloads
 }
 
 interface QueueSearchProps {
@@ -244,14 +246,14 @@ export function QueueSearch({
                             // Find current track index
                             const currentIndex = queueItems.findIndex(item => item.id === currentTrackId);
                             
-                            // Find next track (not suggested) after current track
+                            // Find next track (not suggested and not pending) after current track
                             let nextTrackId: string | null = null;
                             if (currentIndex >= 0) {
-                                // Look for next non-suggested track after current
+                                // Look for next non-suggested, non-pending track after current
                                 for (let i = 1; i < queueItems.length; i++) {
                                     const nextIndex = (currentIndex + i) % queueItems.length;
                                     const nextItem = queueItems[nextIndex];
-                                    if (!nextItem.isSuggested) {
+                                    if (!nextItem.isSuggested && !nextItem.isPending) {
                                         nextTrackId = nextItem.id;
                                         break;
                                     }
@@ -260,7 +262,7 @@ export function QueueSearch({
                             
                             return queueItems.map((item) => {
                                 const isCurrentTrack = currentTrackId === item.id;
-                                const isNextTrack = item.id === nextTrackId && !item.isSuggested;
+                                const isNextTrack = item.id === nextTrackId && !item.isSuggested && !item.isPending;
                             
                             return (
                                 <div
@@ -290,10 +292,15 @@ export function QueueSearch({
                                     {/* Card - Same for all items */}
                                     <div
                                         onClick={() => {
-                                            // Only allow host to change track
-                                            if (effectiveMode === "host") {
+                                            // Only allow host to change track, and don't allow clicking pending items
+                                            if (effectiveMode === "host" && !item.isPending) {
                                                 // Don't do anything if clicking the current track
                                                 if (item.id === currentTrackId) {
+                                                    return;
+                                                }
+                                                
+                                                // Don't allow clicking items without URL (pending or failed)
+                                                if (!item.url) {
                                                     return;
                                                 }
                                                 
@@ -310,7 +317,8 @@ export function QueueSearch({
                                                                 artwork: item.artwork,
                                                                 source: item.source,
                                                                 duration: item.duration
-                                                            }
+                                                            },
+                                                            is_playing: true // Request to play the track
                                                         }
                                                     }));
                                                 }
@@ -321,9 +329,10 @@ export function QueueSearch({
                                             item.source === "youtube" && "border-red-500",
                                             isCurrentTrack && "bg-primary/10 border-primary",
                                             isNextTrack && "bg-muted/30",
-                                            !isEditMode && "hover:bg-muted/50",
-                                            effectiveMode === "host" && item.id !== currentTrackId && "cursor-pointer",
-                                            effectiveMode === "host" && item.id === currentTrackId && "cursor-default"
+                                            item.isPending && "opacity-50", // Faded appearance for pending items
+                                            !isEditMode && !item.isPending && "hover:bg-muted/50",
+                                            effectiveMode === "host" && item.id !== currentTrackId && !item.isPending && "cursor-pointer",
+                                            effectiveMode === "host" && (item.id === currentTrackId || item.isPending) && "cursor-default"
                                         )}
                                     >
                                         {/* Now Playing / Next indicator - Top right */}
@@ -345,11 +354,21 @@ export function QueueSearch({
                                         )}
 
                                         {/* Album Art */}
-                                        <img
-                                            src={item.artwork || "https://picsum.photos/id/842/1500/1500"}
-                                            alt={`${item.title} artwork`}
-                                            className="w-12 h-12 rounded object-cover flex-shrink-0"
-                                        />
+                                        <div className="relative">
+                                            <img
+                                                src={item.artwork || "https://picsum.photos/id/842/1500/1500"}
+                                                alt={`${item.title} artwork`}
+                                                className={cn(
+                                                    "w-12 h-12 rounded object-cover flex-shrink-0",
+                                                    item.isPending && "opacity-50"
+                                                )}
+                                            />
+                                            {item.isPending && (
+                                                <div className="absolute inset-0 flex items-center justify-center bg-background/50 rounded">
+                                                    <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                                                </div>
+                                            )}
+                                        </div>
 
                                         {/* Song Info */}
                                         <div className="flex-1 min-w-0 overflow-hidden">
@@ -625,20 +644,32 @@ function SearchTab({
 
     const handleDownloadAndAdd = async (result: any) => {
         try {
-            const downloadResult = await downloadMutation.mutateAsync(result.id);
-            
+            // Create pending queue item
             const queueItem: QueueItem = {
                 id: result.id,
-                title: downloadResult.title || result.title,
+                title: result.title,
                 artist: result.channel || "Unknown Artist",
-                url: downloadResult.url,
-                source: "html5", // Downloaded as HTML5
-                duration: downloadResult.duration || result.duration,
+                url: "", // Will be set when download completes
+                source: "html5",
+                duration: result.duration,
                 artwork: result.thumbnail,
+                isPending: true,
+                video_id: result.id, // Store video ID for download
             };
 
-            if (onAddToQueue) {
+            // Send via WebSocket to backend - adds to queue as pending, then starts download
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "add_pending_download",
+                    payload: { item: queueItem }
+                }));
+                
+                // Switch to queue tab automatically
+                setActiveTab("queue");
+            } else if (onAddToQueue) {
+                // Fallback to callback if WebSocket not available
                 await onAddToQueue(queueItem);
+                setActiveTab("queue");
             }
         } catch (error) {
             console.error("Download and add failed:", error);

@@ -166,11 +166,15 @@ class DownloadQueue:
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(url, download=False)
                         
+                        # Get artwork from video info
+                        artwork = info.get('thumbnail') or f"https://img.youtube.com/vi/{task.video_id}/maxresdefault.jpg"
+                        
                         return {
                             "success": True,
                             "video_id": task.video_id,
                             "title": info.get('title', 'Unknown'),
                             "duration": info.get('duration'),
+                            "artwork": artwork,
                             "filename": supabase_filename,
                             "url": public_url,
                             "size": file_info.get('size') if isinstance(file_info, dict) else None,
@@ -228,11 +232,15 @@ class DownloadQueue:
                 # Clean up
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 
+                # Get artwork from video info
+                artwork = info.get('thumbnail') or f"https://img.youtube.com/vi/{task.video_id}/maxresdefault.jpg"
+                
                 return {
                     "success": True,
                     "video_id": task.video_id,
                     "title": info.get('title', 'Unknown'),
                     "duration": info.get('duration'),
+                    "artwork": artwork,
                     "filename": supabase_filename,
                     "url": public_url,
                     "size": len(file_content),
@@ -299,6 +307,9 @@ def ensure_workers_started():
     if not _workers_started:
         download_queue.start_workers()
         _workers_started = True
+
+# Track active downloads per IP (only 1 download at a time per IP)
+active_downloads_per_ip: Dict[str, str] = {}  # IP -> task_id
 
 
 class SearchResult(BaseModel):
