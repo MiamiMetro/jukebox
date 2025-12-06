@@ -11,4 +11,10 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  server: {
+    headers: {
+      // Remove CSP header to allow YouTube scripts (report-only warnings won't block functionality)
+      // The warnings are from Vite's default CSP which is report-only
+    },
+  },
 })

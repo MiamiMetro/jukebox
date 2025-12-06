@@ -12,17 +12,20 @@ let sharedMode: "host" | "listener" = "host";
 let sharedVariant: "full" | "mini" = "full";
 let sharedWs: WebSocket | null = null;
 let sharedTrack: Track | null = null;
+let sharedQueue: import("./components/queue-search").QueueItem[] = [];
 const trackModeRef = { current: "html5" as "html5" | "youtube" };
 
 // Callbacks to update shared state
 let setSharedMode: ((mode: "host" | "listener") => void) | null = null;
 let setSharedVariant: ((variant: "full" | "mini") => void) | null = null;
+let setSharedQueue: ((queue: import("./components/queue-search").QueueItem[]) => void) | null = null;
 
 function AudioPlayerContainer() {
     const [track, setTrack] = useState<Track | null>(null);
     const [controls, setControls] = useState<PlayerControls | null>(null);
     const [mode, setMode] = useState<"host" | "listener">("host");
     const [variant, setVariant] = useState<"full" | "mini">("full");
+    const [queue, setQueue] = useState<import("./components/queue-search").QueueItem[]>([]);
     const ws = useRef<WebSocket | null>(null);
     const isChangingTrackRef = useRef<boolean>(false);
 
@@ -37,12 +40,14 @@ function AudioPlayerContainer() {
     useEffect(() => {
         setSharedMode = setMode;
         setSharedVariant = setVariant;
+        setSharedQueue = setQueue;
         sharedControls = controls;
         sharedMode = mode;
         sharedVariant = variant;
         sharedWs = ws.current || null;
         sharedTrack = track;
-    }, [track, controls, mode, variant, trackMode]);
+        sharedQueue = queue;
+    }, [track, controls, mode, variant, trackMode, queue]);
 
     const connectToServer = () => {
         ws.current = new WebSocket("ws://192.168.1.2:8000/ws");
@@ -112,6 +117,7 @@ function AudioPlayerContainer() {
                 }
             } else if (data.type === "set_track") {
                 const trackData = data.payload.track;
+                const shouldPlay = data.payload.is_playing === true;
 
                 // Backend now sends full track object
                 if (typeof trackData === "object" && trackData.url) {
@@ -136,7 +142,33 @@ function AudioPlayerContainer() {
                 }
 
                 controls?.seek(0);
-                controls?.pause();
+                
+                // Auto-play if backend indicates it should play
+                if (shouldPlay) {
+                    // Wait a bit for track to load, then play
+                    setTimeout(() => {
+                        controls?.play();
+                    }, 100);
+                } else {
+                    controls?.pause();
+                }
+            } else if (data.type === "queue_sync") {
+                // Handle queue sync from backend
+                const backendQueue = data.payload.queue || [];
+                // Convert backend queue format to QueueItem format
+                const queueItems: import("./components/queue-search").QueueItem[] = backendQueue.map((item: any) => ({
+                    id: String(item.id || ""),
+                    title: item.title || "Unknown",
+                    artist: item.artist || "Unknown Artist",
+                    url: item.url || "",
+                    source: (item.source || "html5") as "html5" | "youtube",
+                    duration: item.duration,
+                    artwork: item.artwork,
+                    isSuggested: item.isSuggested || false,
+                    votes: item.votes || 0,
+                    userVote: item.userVote || null,
+                }));
+                setQueue(queueItems);
             } else if (data.type === "next-track") {
                 const trackData = data.payload.track;
                 const state = controls?.getState();
@@ -232,6 +264,8 @@ function AudioPlayerContainer() {
 
         ws.current.onopen = () => {
             console.log("socket opened");
+            // Request current queue when connected
+            ws.current?.send(JSON.stringify({ type: "get_queue" }));
         };
 
         ws.current.onclose = (event) => {
@@ -368,6 +402,7 @@ function MiddleBottom() {
 // Left Sidebar Content Component - Always mounted, state preserved
 function LeftSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean; onClose?: () => void }) {
     const [currentTrackId, setCurrentTrackId] = useState<string | null>(sharedTrack?.id || null);
+    const [queue, setQueue] = useState<import("./components/queue-search").QueueItem[]>(sharedQueue || []);
     
     // Sync with shared track
     useEffect(() => {
@@ -375,9 +410,12 @@ function LeftSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean;
             if (sharedTrack?.id !== currentTrackId) {
                 setCurrentTrackId(sharedTrack?.id || null);
             }
+            if (sharedQueue !== queue) {
+                setQueue(sharedQueue || []);
+            }
         }, 100);
         return () => clearInterval(interval);
-    }, [currentTrackId]);
+    }, [currentTrackId, queue]);
     
     return (
         <div className="h-full flex flex-col min-h-0">
@@ -386,6 +424,8 @@ function LeftSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean;
                 isDrawer={isDrawer}
                 onClose={onClose}
                 currentTrackId={currentTrackId}
+                queueItems={queue}
+                ws={sharedWs}
                 onModeChange={(newMode) => {
                     // Debug: Update shared mode when toggle is used
                     if (setSharedMode) {

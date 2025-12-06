@@ -64,11 +64,23 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   useEffect(() => {
     if (typeof navigator !== "undefined" && "mediaSession" in navigator && currentTrack && adapterRef.current) {
       if ("setPositionState" in navigator.mediaSession) {
-        navigator.mediaSession.setPositionState({
-          duration: playerState.duration || 0,
-          playbackRate: 1.0,
-          position: playerState.currentTime,
-        })
+        // Only set position state if duration is valid and current time is within bounds
+        const duration = playerState.duration || 0
+        const currentTime = playerState.currentTime || 0
+        
+        // Ensure duration is valid (> 0) and current time doesn't exceed duration
+        if (duration > 0 && currentTime >= 0 && currentTime <= duration) {
+          try {
+            navigator.mediaSession.setPositionState({
+              duration: duration,
+              playbackRate: 1.0,
+              position: currentTime,
+            })
+          } catch (error) {
+            // Silently handle errors (e.g., if position state can't be set)
+            console.debug("Failed to set MediaSession position state:", error)
+          }
+        }
       }
     }
   }, [currentTrack, playerState.currentTime, playerState.duration])

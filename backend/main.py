@@ -145,6 +145,13 @@ async def ws_endpoint(ws: WebSocket):
         "payload": state,
         "server_time": time.time()
     })
+    
+    # send current queue when someone joins
+    await ws.send_json({
+        "type": "queue_sync",
+        "payload": {"queue": queue},
+        "server_time": time.time()
+    })
 
     try:
         while True:
@@ -219,10 +226,15 @@ async def ws_endpoint(ws: WebSocket):
                     state["duration"] = track_data.get("duration")
                 
                 state["position"] = 0.0
-                state["is_playing"] = False
+                state["is_playing"] = True  # Auto-play when track is set
+                state["start_time"] = now  # Set start time for playback
                 await broadcast({
                     "type": "set_track",
-                    "payload": {"track": state["track"]},
+                    "payload": {
+                        "track": state["track"],
+                        "is_playing": True,
+                        "start_time": state["start_time"]
+                    },
                     "server_time": now
                 })
 
@@ -246,6 +258,104 @@ async def ws_endpoint(ws: WebSocket):
                     "payload": state,
                     "server_time": now
                 })
+
+            elif t == "get_queue":
+                # Send current queue to requesting client
+                now = time.time()
+                await ws.send_json({
+                    "type": "queue_sync",
+                    "payload": {"queue": queue},
+                    "server_time": now
+                })
+
+            elif t == "delete_item":
+                # Delete item from queue
+                now = time.time()
+                item_id = data.get("payload", {}).get("item_id")
+                if item_id:
+                    # Remove item from queue
+                    queue[:] = [item for item in queue if item.get("id") != item_id]
+                    # Broadcast updated queue to all clients
+                    await broadcast({
+                        "type": "queue_sync",
+                        "payload": {"queue": queue},
+                        "server_time": now
+                    })
+
+            elif t == "reorder_item":
+                # Reorder item in queue
+                now = time.time()
+                item_id = data.get("payload", {}).get("item_id")
+                direction = data.get("payload", {}).get("direction")  # "up" or "down"
+                
+                if item_id and direction:
+                    # Find current index
+                    current_index = next((i for i, item in enumerate(queue) if item.get("id") == item_id), -1)
+                    
+                    if current_index >= 0:
+                        if direction == "up" and current_index > 0:
+                            # Move up
+                            queue[current_index], queue[current_index - 1] = queue[current_index - 1], queue[current_index]
+                        elif direction == "down" and current_index < len(queue) - 1:
+                            # Move down
+                            queue[current_index], queue[current_index + 1] = queue[current_index + 1], queue[current_index]
+                        
+                        # Broadcast updated queue to all clients
+                        await broadcast({
+                            "type": "queue_sync",
+                            "payload": {"queue": queue},
+                            "server_time": now
+                        })
+
+            elif t == "approve_item":
+                # Approve suggested item (move from suggested to regular queue)
+                # For now, we'll just mark it as not suggested
+                # In a full implementation, you might have a separate suggested queue
+                now = time.time()
+                item_id = data.get("payload", {}).get("item_id")
+                
+                if item_id:
+                    # Find and update the item
+                    for item in queue:
+                        if item.get("id") == item_id:
+                            item["isSuggested"] = False
+                            break
+                    
+                    # Broadcast updated queue to all clients
+                    await broadcast({
+                        "type": "queue_sync",
+                        "payload": {"queue": queue},
+                        "server_time": now
+                    })
+
+            elif t == "add_to_queue":
+                # Add item to queue
+                now = time.time()
+                item_data = data.get("payload", {}).get("item", {})
+                
+                if item_data:
+                    # Create queue item from payload
+                    queue_item = {
+                        "id": item_data.get("id", str(time.time())),
+                        "title": item_data.get("title", "Unknown"),
+                        "artist": item_data.get("artist", "Unknown Artist"),
+                        "url": item_data.get("url", ""),
+                        "artwork": item_data.get("artwork"),
+                        "source": item_data.get("source", "html5"),
+                        "duration": item_data.get("duration"),
+                        "isSuggested": item_data.get("isSuggested", False),
+                        "votes": item_data.get("votes", 0),
+                    }
+                    
+                    # Add to queue
+                    queue.append(queue_item)
+                    
+                    # Broadcast updated queue to all clients
+                    await broadcast({
+                        "type": "queue_sync",
+                        "payload": {"queue": queue},
+                        "server_time": now
+                    })
 
     except WebSocketDisconnect:
         clients.remove(ws)

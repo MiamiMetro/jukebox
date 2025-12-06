@@ -18,6 +18,8 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
   private bufferingCallback?: (isBuffering: boolean) => void
   private timeUpdateInterval?: ReturnType<typeof setInterval>
   private isReady = false
+  private isLoadingNewVideo = false
+  private loadVideoResolve?: () => void
 
   constructor(containerId = "youtube-player") {
     this.containerId = containerId
@@ -43,9 +45,20 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
   }
 
   private extractVideoId(url: string): string {
+    // If it's already a valid 11-character video ID, return it
+    if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+      return url
+    }
+    
+    // Try to extract from YouTube URL patterns
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/
     const match = url.match(regExp)
-    return match && match[7].length === 11 ? match[7] : url
+    if (match && match[7] && match[7].length === 11) {
+      return match[7]
+    }
+    
+    // If we can't extract a valid video ID, throw an error
+    throw new Error(`Invalid YouTube URL or video ID: ${url}`)
   }
 
   async load(url: string): Promise<void> {
@@ -53,10 +66,72 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
     const videoId = this.extractVideoId(url)
 
     return new Promise((resolve) => {
-      if (this.player) {
+      // If player exists and is ready, use it
+      if (this.player && this.isReady && typeof this.player.loadVideoById === 'function') {
+        // Reset ready state - will be set to true when new video is ready
+        this.isReady = false
+        this.isLoadingNewVideo = true
+        this.loadVideoResolve = resolve
+        
+        // Load the new video
         this.player.loadVideoById(videoId)
-        resolve()
+        
+        // Poll for duration until video is ready (max 5 seconds)
+        let attempts = 0
+        const maxAttempts = 50 // 50 attempts * 100ms = 5 seconds
+        const checkDuration = setInterval(() => {
+          attempts++
+          try {
+            const duration = this.player.getDuration()
+            if (duration && duration > 0 && isFinite(duration)) {
+              this.isReady = true
+              this.isLoadingNewVideo = false
+              this.durationChangeCallback?.(duration)
+              clearInterval(checkDuration)
+              if (this.loadVideoResolve) {
+                this.loadVideoResolve()
+                this.loadVideoResolve = undefined
+              }
+            } else if (attempts >= maxAttempts) {
+              // Timeout - resolve anyway
+              this.isReady = true
+              this.isLoadingNewVideo = false
+              clearInterval(checkDuration)
+              if (this.loadVideoResolve) {
+                this.loadVideoResolve()
+                this.loadVideoResolve = undefined
+              }
+            }
+          } catch (e) {
+            // Player might not be ready yet, continue polling
+            if (attempts >= maxAttempts) {
+              this.isReady = true
+              this.isLoadingNewVideo = false
+              clearInterval(checkDuration)
+              if (this.loadVideoResolve) {
+                this.loadVideoResolve()
+                this.loadVideoResolve = undefined
+              }
+            }
+          }
+        }, 100)
+        
         return
+      }
+      
+      // If player exists but isn't ready or doesn't have the method, destroy and recreate
+      if (this.player) {
+        try {
+          if (this.timeUpdateInterval) {
+            clearInterval(this.timeUpdateInterval)
+            this.timeUpdateInterval = undefined
+          }
+          this.player.destroy()
+        } catch (e) {
+          // Ignore destroy errors
+        }
+        this.player = null
+        this.isReady = false
       }
 
       // Ensure container exists and is visible (required for iOS Safari)
@@ -114,9 +189,27 @@ export class YouTubeAudioAdapter implements AudioPlayerAdapter {
               this.bufferingCallback?.(false)
             } else if (state === window.YT.PlayerState.BUFFERING) {
               this.bufferingCallback?.(true)
-            } else if (state === window.YT.PlayerState.CUED) {
+            } else if (state === window.YT.PlayerState.CUED || state === window.YT.PlayerState.UNSTARTED) {
               // Video is cued and ready to play - clear buffering
               this.bufferingCallback?.(false)
+              
+              // If we're loading a new video, update duration when it's ready
+              if (this.isLoadingNewVideo && this.player) {
+                try {
+                  const duration = this.player.getDuration()
+                  if (duration && duration > 0 && isFinite(duration)) {
+                    this.isReady = true
+                    this.isLoadingNewVideo = false
+                    this.durationChangeCallback?.(duration)
+                    if (this.loadVideoResolve) {
+                      this.loadVideoResolve()
+                      this.loadVideoResolve = undefined
+                    }
+                  }
+                } catch (e) {
+                  // Duration not available yet, will be caught by polling
+                }
+              }
             }
           },
         },

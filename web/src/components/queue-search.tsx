@@ -21,11 +21,12 @@ interface QueueSearchProps {
     currentTrackId?: string | null;
     // Backend integration props - pass these to connect to backend
     queueItems?: QueueItem[]; // If provided, use this instead of internal state
-    onQueueItemsChange?: (items: QueueItem[]) => void; // Callback when queue changes
-    onVote?: (itemId: string, vote: "up" | "down") => Promise<void> | void; // Backend vote handler
-    onApprove?: (itemId: string) => Promise<void> | void; // Backend approve handler
-    onDelete?: (itemId: string) => Promise<void> | void; // Backend delete handler
-    onReorder?: (itemId: string, direction: "up" | "down") => Promise<void> | void; // Backend reorder handler
+    ws?: WebSocket | null; // WebSocket connection for real-time updates
+    onQueueItemsChange?: (items: QueueItem[]) => void; // Callback when queue changes (deprecated, use ws)
+    onVote?: (itemId: string, vote: "up" | "down") => Promise<void> | void; // Backend vote handler (disabled for now)
+    onApprove?: (itemId: string) => Promise<void> | void; // Backend approve handler (deprecated, use ws)
+    onDelete?: (itemId: string) => Promise<void> | void; // Backend delete handler (deprecated, use ws)
+    onReorder?: (itemId: string, direction: "up" | "down") => Promise<void> | void; // Backend reorder handler (deprecated, use ws)
     onAddToQueue?: (item: QueueItem) => Promise<void> | void; // Backend add to queue handler
     onSuggest?: (item: QueueItem) => Promise<void> | void; // Backend suggest handler
     onModeChange?: (mode: "host" | "listener") => void; // Callback when mode changes (for debug toggle)
@@ -79,8 +80,7 @@ export function QueueSearch({
     onClose, 
     currentTrackId,
     queueItems: externalQueueItems,
-    onQueueItemsChange,
-    onVote,
+    ws,
     onApprove,
     onDelete,
     onReorder,
@@ -96,98 +96,8 @@ export function QueueSearch({
     const effectiveMode = onModeChange ? debugMode : mode;
     const [searchQuery, setSearchQuery] = useState("");
     
-    // Use external queue items if provided, otherwise use mock data
-    const [internalQueueItems, setInternalQueueItems] = useState<QueueItem[]>([
-        {
-            id: "1",
-            title: "Sample Song 1",
-            artist: "Artist 1",
-            url: "https://example.com/song1.mp3",
-            source: "html5",
-            duration: 255,
-            artwork: "https://picsum.photos/id/842/1500/1500",
-            isSuggested: false,
-            isNext: true, // Debug: Mark as next
-        },
-        {
-            id: "2",
-            title: "Sample Song 2",
-            artist: "Artist 2",
-            url: "https://example.com/song2.mp3",
-            source: "youtube", // This will have red border
-            duration: 264,
-            artwork: "https://picsum.photos/id/842/1500/1500",
-            isSuggested: false,
-        },
-        {
-            id: "3",
-            title: "Timeless",
-            artist: "The Weeknd",
-            url: "https://juke.bgocumlu.workers.dev/jukebox-tracks/yt-5EpyN_6dqyk.mp3",
-            source: "html5",
-            duration: 255,
-            artwork: "https://i.ytimg.com/vi/5EpyN_6dqyk/maxresdefault.jpg",
-            isSuggested: false,
-
-        },
-        {
-            id: "4",
-            title: "Suggested Song 2",
-            artist: "Artist 4",
-            url: "https://example.com/suggested2.mp3",
-            source: "youtube", // Red border
-            duration: 200,
-            artwork: "https://picsum.photos/id/842/1500/1500",
-            isSuggested: true,
-            votes: -2,
-            userVote: null,
-        },
-        {
-            id: "5",
-            title: "Suggested Song 2",
-            artist: "Artist 4",
-            url: "https://example.com/suggested2.mp3",
-            source: "youtube", // Red border
-            duration: 200,
-            artwork: "https://picsum.photos/id/842/1500/1500",
-            isSuggested: true,
-            votes: -2,
-            userVote: null,
-        },
-        {
-            id: "6",
-            title: "Suggested Song 2",
-            artist: "Artist 4",
-            url: "https://example.com/suggested2.mp3",
-            source: "youtube", // Red border
-            duration: 200,
-            artwork: "https://picsum.photos/id/842/1500/1500",
-            isSuggested: true,
-            votes: -2,
-            userVote: null,
-        },
-    ]);
-    
-    // Use external queue if provided, otherwise use internal state
-    const queueItems = externalQueueItems || internalQueueItems;
-    
-    // Helper to update queue items (handles both internal and external)
-    const updateQueueItems = (updater: QueueItem[] | ((items: QueueItem[]) => QueueItem[])) => {
-        if (onQueueItemsChange) {
-            // External control - call the callback
-            const newItems = typeof updater === 'function' 
-                ? updater(queueItems) 
-                : updater;
-            onQueueItemsChange(newItems);
-        } else {
-            // Internal state
-            if (typeof updater === 'function') {
-                setInternalQueueItems(updater);
-            } else {
-                setInternalQueueItems(updater);
-            }
-        }
-    };
+    // Use external queue items from WebSocket/backend - no internal state
+    const queueItems = externalQueueItems || [];
 
     const formatDuration = (seconds?: number): string => {
         if (!seconds) return "0:00";
@@ -196,63 +106,21 @@ export function QueueSearch({
         return `${mins}:${secs.toString().padStart(2, "0")}`;
     };
 
-    const handleVote = async (itemId: string, vote: "up" | "down") => {
-        // Optimistic update
-        const optimisticUpdate = (items: QueueItem[]) =>
-            items.map(item => {
-                if (item.id === itemId && item.isSuggested) {
-                    const currentVote = item.userVote;
-                    let newVotes = item.votes || 0;
-                    
-                    // Remove previous vote if exists
-                    if (currentVote === "up") newVotes -= 1;
-                    if (currentVote === "down") newVotes += 1;
-                    
-                    // Add new vote
-                    if (vote === "up") newVotes += 1;
-                    if (vote === "down") newVotes -= 1;
-                    
-                    // If clicking same vote, remove it
-                    const newUserVote = currentVote === vote ? null : vote;
-                    if (currentVote === vote) {
-                        if (vote === "up") newVotes -= 1;
-                        if (vote === "down") newVotes += 1;
-                    }
-                    
-                    return {
-                        ...item,
-                        votes: newVotes,
-                        userVote: newUserVote,
-                    };
-                }
-                return item;
-            });
-        
-        updateQueueItems(optimisticUpdate);
-        
-        // Call backend if provided
-        if (onVote) {
-            try {
-                await onVote(itemId, vote);
-            } catch (error) {
-                // Revert on error - backend will send correct state
-                console.error("Vote failed:", error);
-            }
-        }
+    const handleVote = async (_itemId: string, _vote: "up" | "down") => {
+        // Vote functionality disabled for now - buttons will be non-functional
+        // This will be implemented later
+        console.log("Vote functionality disabled");
     };
 
     const handleApprove = async (itemId: string) => {
-        // Optimistic update
-        updateQueueItems(items =>
-            items.map(item =>
-                item.id === itemId
-                    ? { ...item, isSuggested: false }
-                    : item
-            )
-        );
-        
-        // Call backend if provided
-        if (onApprove) {
+        // Send approve message via WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: "approve_item",
+                payload: { item_id: itemId }
+            }));
+        } else if (onApprove) {
+            // Fallback to callback if WebSocket not available
             try {
                 await onApprove(itemId);
             } catch (error) {
@@ -262,11 +130,14 @@ export function QueueSearch({
     };
 
     const handleDelete = async (itemId: string) => {
-        // Optimistic update
-        updateQueueItems(items => items.filter(item => item.id !== itemId));
-        
-        // Call backend if provided
-        if (onDelete) {
+        // Send delete message via WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: "delete_item",
+                payload: { item_id: itemId }
+            }));
+        } else if (onDelete) {
+            // Fallback to callback if WebSocket not available
             try {
                 await onDelete(itemId);
             } catch (error) {
@@ -276,23 +147,14 @@ export function QueueSearch({
     };
 
     const handleReorder = async (itemId: string, direction: "up" | "down") => {
-        // Optimistic update
-        const optimisticUpdate = (items: QueueItem[]) => {
-            const index = items.findIndex(item => item.id === itemId);
-            if (index === -1) return items;
-            
-            const newIndex = direction === "up" ? index - 1 : index + 1;
-            if (newIndex < 0 || newIndex >= items.length) return items;
-            
-            const newItems = [...items];
-            [newItems[index], newItems[newIndex]] = [newItems[newIndex], newItems[index]];
-            return newItems;
-        };
-        
-        updateQueueItems(optimisticUpdate);
-        
-        // Call backend if provided
-        if (onReorder) {
+        // Send reorder message via WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: "reorder_item",
+                payload: { item_id: itemId, direction }
+            }));
+        } else if (onReorder) {
+            // Fallback to callback if WebSocket not available
             try {
                 await onReorder(itemId, direction);
             } catch (error) {
@@ -428,31 +290,40 @@ export function QueueSearch({
                                     {/* Card - Same for all items */}
                                     <div
                                         onClick={() => {
+                                            // Only allow host to change track
                                             if (effectiveMode === "host") {
-                                                console.log("Queue card clicked:", {
-                                                    id: item.id,
-                                                    title: item.title,
-                                                    artist: item.artist,
-                                                    url: item.url,
-                                                    source: item.source,
-                                                    duration: item.duration,
-                                                    artwork: item.artwork,
-                                                    isSuggested: item.isSuggested,
-                                                    votes: item.votes,
-                                                    userVote: item.userVote,
-                                                    isNext: item.isNext,
-                                                    isCurrentTrack,
-                                                    isNextTrack
-                                                });
+                                                // Don't do anything if clicking the current track
+                                                if (item.id === currentTrackId) {
+                                                    return;
+                                                }
+                                                
+                                                // Send set_track message via WebSocket
+                                                if (ws && ws.readyState === WebSocket.OPEN) {
+                                                    ws.send(JSON.stringify({
+                                                        type: "set_track",
+                                                        payload: {
+                                                            track: {
+                                                                id: item.id,
+                                                                title: item.title,
+                                                                artist: item.artist,
+                                                                url: item.url,
+                                                                artwork: item.artwork,
+                                                                source: item.source,
+                                                                duration: item.duration
+                                                            }
+                                                        }
+                                                    }));
+                                                }
                                             }
                                         }}
                                         className={cn(
-                                            "flex items-center gap-3 p-3 rounded-lg border flex-1 transition-colors relative",
+                                            "flex items-center gap-3 p-3 rounded-lg border flex-1 min-w-0 transition-colors relative",
                                             item.source === "youtube" && "border-red-500",
                                             isCurrentTrack && "bg-primary/10 border-primary",
                                             isNextTrack && "bg-muted/30",
                                             !isEditMode && "hover:bg-muted/50",
-                                            effectiveMode === "host" && "cursor-pointer"
+                                            effectiveMode === "host" && item.id !== currentTrackId && "cursor-pointer",
+                                            effectiveMode === "host" && item.id === currentTrackId && "cursor-default"
                                         )}
                                     >
                                         {/* Now Playing / Next indicator - Top right */}
@@ -481,9 +352,17 @@ export function QueueSearch({
                                         />
 
                                         {/* Song Info */}
-                                        <div className="flex-1 min-w-0">
-                                            <div className="font-semibold truncate">{item.title}</div>
-                                            <div className="text-sm text-muted-foreground truncate">
+                                        <div className="flex-1 min-w-0 overflow-hidden">
+                                            <div 
+                                                className="font-semibold truncate" 
+                                                title={item.title}
+                                            >
+                                                {item.title}
+                                            </div>
+                                            <div 
+                                                className="text-sm text-muted-foreground truncate"
+                                                title={item.artist}
+                                            >
                                                 {item.artist}
                                             </div>
                                             <div className="text-sm text-muted-foreground">
@@ -497,10 +376,12 @@ export function QueueSearch({
                                     <div className="flex flex-col items-center gap-1">
                                         <button
                                             onClick={() => handleVote(item.id, "up")}
+                                            disabled={true}
                                             className={cn(
-                                                "p-1 rounded hover:bg-muted transition-colors",
+                                                "p-1 rounded hover:bg-muted transition-colors opacity-50 cursor-not-allowed",
                                                 item.userVote === "up" && "bg-primary/20"
                                             )}
+                                            title="Voting disabled for now"
                                         >
                                             <ChevronUp className="h-4 w-4" />
                                         </button>
@@ -509,10 +390,12 @@ export function QueueSearch({
                                         </span>
                                         <button
                                             onClick={() => handleVote(item.id, "down")}
+                                            disabled={true}
                                             className={cn(
-                                                "p-1 rounded hover:bg-muted transition-colors",
+                                                "p-1 rounded hover:bg-muted transition-colors opacity-50 cursor-not-allowed",
                                                 item.userVote === "down" && "bg-primary/20"
                                             )}
+                                            title="Voting disabled for now"
                                         >
                                             <ChevronDown className="h-4 w-4" />
                                         </button>
@@ -551,6 +434,8 @@ export function QueueSearch({
                             searchQuery={searchQuery}
                             setSearchQuery={setSearchQuery}
                             mode={effectiveMode}
+                            ws={ws}
+                            setActiveTab={setActiveTab}
                             onAddToQueue={onAddToQueue}
                             onSuggest={onSuggest}
                         />
@@ -580,12 +465,16 @@ function SearchTab({
     searchQuery,
     setSearchQuery,
     mode,
+    ws,
+    setActiveTab,
     onAddToQueue,
     onSuggest,
 }: {
     searchQuery: string;
     setSearchQuery: (query: string) => void;
     mode: "host" | "listener";
+    ws?: WebSocket | null;
+    setActiveTab: (tab: "queue" | "search") => void;
     onAddToQueue?: (item: QueueItem) => Promise<void> | void;
     onSuggest?: (item: QueueItem) => Promise<void> | void;
 }) {
@@ -758,20 +647,36 @@ function SearchTab({
 
     const handleAddDirect = async (result: any) => {
         try {
-            const urlData = await getDownloadUrlAPI(result.id);
+            // For YouTube source, use the YouTube watch URL (not the streaming URL)
+            // The YouTube adapter will extract the video ID from this URL
+            const youtubeWatchUrl = `https://www.youtube.com/watch?v=${result.id}`;
+            
+            // Duration is 1 second less than original
+            const duration = result.duration ? Math.max(1, result.duration - 1) : undefined;
             
             const queueItem: QueueItem = {
                 id: result.id,
                 title: result.title,
                 artist: result.channel || "Unknown Artist",
-                url: urlData.url,
+                url: youtubeWatchUrl, // Use YouTube watch URL for YouTube adapter
                 source: "youtube", // Direct YouTube stream
-                duration: result.duration,
+                duration: duration,
                 artwork: result.thumbnail,
             };
 
-            if (onAddToQueue) {
+            // Send via WebSocket to backend
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "add_to_queue",
+                    payload: { item: queueItem }
+                }));
+                
+                // Switch to queue tab automatically
+                setActiveTab("queue");
+            } else if (onAddToQueue) {
+                // Fallback to callback if WebSocket not available
                 await onAddToQueue(queueItem);
+                setActiveTab("queue");
             }
         } catch (error) {
             console.error("Add direct failed:", error);
@@ -829,7 +734,7 @@ function SearchTab({
     };
 
     const handleAddHTML5Direct = async () => {
-        if (!html5Url.trim()) return;
+        if (!html5Url.trim() || !isUrlValid) return;
         
         const queueItem: QueueItem = {
             id: `html5-${Date.now()}`,
@@ -837,15 +742,35 @@ function SearchTab({
             artist: html5Artist.trim() || "Unknown Artist",
             url: html5Url.trim(),
             source: "html5",
-            artwork: undefined,
+            duration: html5Duration || undefined,
+            artwork: "https://placehold.co/800?text=HTML5",
         };
 
-        if (onAddToQueue) {
-            await onAddToQueue(queueItem);
+        // Send via WebSocket to backend
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: "add_to_queue",
+                payload: { item: queueItem }
+            }));
+            
+            // Switch to queue tab automatically
+            setActiveTab("queue");
+            
             // Clear form
             setHtml5Url("");
             setHtml5Title("");
             setHtml5Artist("");
+            setHtml5Duration(null);
+        } else if (onAddToQueue) {
+            // Fallback to callback if WebSocket not available
+            await onAddToQueue(queueItem);
+            setActiveTab("queue");
+            
+            // Clear form
+            setHtml5Url("");
+            setHtml5Title("");
+            setHtml5Artist("");
+            setHtml5Duration(null);
         }
     };
 
@@ -951,7 +876,7 @@ function SearchTab({
                     <div>
                         <Input
                             type="text"
-                            placeholder="Source URL"
+                            placeholder="HTML5 Source URL"
                             value={html5Url}
                             onChange={(e) => setHtml5Url(e.target.value)}
                             className="w-full"
@@ -986,7 +911,7 @@ function SearchTab({
                         {mode === "host" && (
                             <Button
                                 onClick={handleAddHTML5Direct}
-                                disabled={!html5Url.trim()}
+                                disabled={!html5Url.trim() || !isUrlValid}
                                 className="w-full"
                             >
                                 <Plus className="h-4 w-4 mr-2" />
@@ -995,9 +920,10 @@ function SearchTab({
                         )}
                         <Button
                             onClick={handleSuggestHTML5Direct}
-                            disabled={!html5Url.trim()}
+                            disabled={true}
                             variant="outline"
-                            className="w-full"
+                            className="w-full opacity-50 cursor-not-allowed"
+                            title="Voting disabled for now"
                         >
                             <Vote className="h-4 w-4 mr-2" />
                             Open for Vote
@@ -1112,20 +1038,21 @@ function SearchTab({
                                             </div>
                                         )}
                                         
-                                        {/* Open for Vote button with dropdown - Available for both host and listener */}
+                                        {/* Open for Vote button with dropdown - Disabled for now */}
                                         <div className="relative">
                                             <Button
                                                 size="icon"
                                                 variant="outline"
-                                                className="h-8 w-8"
-                                                onClick={() => setOpenMenuId(openMenuId === `vote-${result.id}` ? null : `vote-${result.id}`)}
-                                                title="Open for Vote"
+                                                className="h-8 w-8 opacity-50 cursor-not-allowed"
+                                                disabled={true}
+                                                onClick={() => {}} // Disabled - no action
+                                                title="Voting disabled for now"
                                             >
                                                 <Vote className="h-4 w-4" />
                                             </Button>
                                             
-                                            {/* Dropdown menu */}
-                                            {openMenuId === `vote-${result.id}` && (
+                                            {/* Dropdown menu - kept for future implementation */}
+                                            {false && openMenuId === `vote-${result.id}` && (
                                                 <>
                                                     <div 
                                                         className="fixed inset-0 z-10" 
