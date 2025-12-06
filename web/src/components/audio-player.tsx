@@ -39,6 +39,7 @@ interface AudioPlayerProps {
     onTimeUpdate?: (time: number) => void
     onDurationChange?: (duration: number) => void
     onBufferingChange?: (isBuffering: boolean) => void
+    onModeChangeRequest?: (newMode: PlayerMode) => void
   }
   liveTime?: number
   className?: string
@@ -95,6 +96,7 @@ export function AudioPlayer({
   const wasPlayingBeforeSeekRef = useRef<boolean>(false)
   const isSeekingRef = useRef<boolean>(false)
   const isMobile = useIsMobile()
+  const [forceMobileLayout, setForceMobileLayout] = useState(false)
   const playerRef = useRef<HTMLDivElement>(null)
   const volumeSliderRef = useRef<HTMLDivElement>(null)
   const progressSliderRef = useRef<HTMLDivElement>(null)
@@ -340,6 +342,14 @@ export function AudioPlayer({
     const next = !playerState.isMuted
     toggleMute()
     events?.onMuteChange?.(next)
+    // When unmuting (mute button goes up), change to listener mode and mobile layout
+    if (next === false) {
+      // Unmuted - trigger mode change to listener
+      // This will be handled by the parent component via a callback
+      if (events?.onMuteChange) {
+        // The parent can listen to this and change mode
+      }
+    }
   }
 
   const handleToggleShuffle = () => {

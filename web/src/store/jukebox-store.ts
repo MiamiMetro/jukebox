@@ -1,0 +1,89 @@
+import { create } from 'zustand';
+import type { Track } from '../types/audio-player';
+import type { PlayerControls } from '../components/audio-player';
+import type { QueueItem } from '../components/queue-search';
+
+interface JukeboxStore {
+    // WebSocket connection
+    ws: WebSocket | null;
+    setWs: (ws: WebSocket | null) => void;
+    
+    // Player controls (for programmatic control)
+    controls: PlayerControls | null;
+    setControls: (controls: PlayerControls | null) => void;
+    
+    // User mode (host/listener)
+    mode: "host" | "listener";
+    setMode: (mode: "host" | "listener") => void;
+    
+    // Current track
+    currentTrack: Track | null;
+    setCurrentTrack: (track: Track | null) => void;
+    
+    // Queue
+    queue: QueueItem[];
+    setQueue: (queue: QueueItem[]) => void;
+    
+    // Track mode (html5/youtube) - for internal use
+    trackMode: "html5" | "youtube";
+    setTrackMode: (mode: "html5" | "youtube") => void;
+    
+    // Current user info
+    currentUser: {
+        name: string;
+        role: string;
+        client_ip: string;
+        client_port?: string | number;
+    } | null;
+    setCurrentUser: (user: {
+        name: string;
+        role: string;
+        client_ip: string;
+        client_port?: string | number;
+    } | null) => void;
+    
+    // Room users list
+    roomUsers: Array<{
+        name: string;
+        role: string;
+        client_ip: string;
+        client_port?: string | number;
+        is_host: boolean;
+        is_moderator: boolean;
+    }>;
+    setRoomUsers: (users: Array<{
+        name: string;
+        role: string;
+        client_ip: string;
+        client_port?: string | number;
+        is_host: boolean;
+        is_moderator: boolean;
+    }>) => void;
+}
+
+export const useJukeboxStore = create<JukeboxStore>((set) => ({
+    ws: null,
+    setWs: (ws) => set({ ws }),
+    
+    controls: null,
+    setControls: (controls) => set({ controls }),
+    
+    mode: "host",
+    setMode: (mode) => set({ mode }),
+    
+    currentTrack: null,
+    setCurrentTrack: (track) => set({ currentTrack: track }),
+    
+    queue: [],
+    setQueue: (queue) => set({ queue }),
+    
+    trackMode: "html5",
+    setTrackMode: (mode) => set({ trackMode: mode }),
+    
+    currentUser: null,
+    setCurrentUser: (user) => set({ currentUser: user }),
+    
+    roomUsers: [],
+    setRoomUsers: (users) => set({ roomUsers: users }),
+}));
+

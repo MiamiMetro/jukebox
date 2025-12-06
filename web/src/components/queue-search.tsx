@@ -31,7 +31,6 @@ interface QueueSearchProps {
     onReorder?: (itemId: string, direction: "up" | "down") => Promise<void> | void; // Backend reorder handler (deprecated, use ws)
     onAddToQueue?: (item: QueueItem) => Promise<void> | void; // Backend add to queue handler
     onSuggest?: (item: QueueItem) => Promise<void> | void; // Backend suggest handler
-    onModeChange?: (mode: "host" | "listener") => void; // Callback when mode changes (for debug toggle)
 }
 
 const API_BASE = "http://192.168.1.2:8000";
@@ -88,18 +87,21 @@ export function QueueSearch({
     onReorder,
     onAddToQueue,
     onSuggest,
-    onModeChange,
 }: QueueSearchProps) {
     const [activeTab, setActiveTab] = useState<"queue" | "search">("queue");
     const [isEditMode, setIsEditMode] = useState(false);
-    const [debugMode, setDebugMode] = useState<"host" | "listener">(mode);
     
-    // Use debug mode if onModeChange is provided, otherwise use prop mode
-    const effectiveMode = onModeChange ? debugMode : mode;
+    // Use prop mode directly (set from backend based on user role)
+    const effectiveMode = mode;
     const [searchQuery, setSearchQuery] = useState("");
     
     // Use external queue items from WebSocket/backend - no internal state
     const queueItems = externalQueueItems || [];
+    
+    // Debug: Log queue items
+    useEffect(() => {
+        console.log("QueueSearch received queueItems:", queueItems, "length:", queueItems.length);
+    }, [queueItems]);
 
     const formatDuration = (seconds?: number): string => {
         if (!seconds) return "0:00";
@@ -177,21 +179,6 @@ export function QueueSearch({
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
-                        {/* Debug Mode Toggle */}
-                        {onModeChange && (
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                    const newMode = debugMode === "host" ? "listener" : "host";
-                                    setDebugMode(newMode);
-                                    onModeChange(newMode);
-                                }}
-                                className="text-xs"
-                            >
-                                {effectiveMode === "host" ? "Host" : "Listener"}
-                            </Button>
-                        )}
                         {/* Close button - only show in drawer mode */}
                         {isDrawer && onClose && (
                             <Button
@@ -260,13 +247,35 @@ export function QueueSearch({
                                 }
                             }
                             
-                            return queueItems.map((item) => {
+                            // Filter out items without valid IDs (non-empty string)
+                            const validQueueItems = queueItems.filter(item => item && item.id && String(item.id).trim() !== "");
+                            
+                            if (validQueueItems.length === 0 && queueItems.length > 0) {
+                                console.warn("QueueSearch: Found items but none have valid IDs:", queueItems);
+                                // If no valid items but we have items, show them anyway (might be pending items)
+                                return queueItems.map((item, index) => {
+                                    // Use index as fallback key if ID is invalid
+                                    const itemKey = (item && item.id && String(item.id).trim() !== "") ? item.id : `item-${index}`;
+                                    const isCurrentTrack = currentTrackId === item.id;
+                                    const isNextTrack = item.id === nextTrackId && !item.isSuggested && !item.isPending;
+                                    
+                                    return (
+                                        <div key={itemKey} className="text-sm text-muted-foreground p-2">
+                                            Invalid item: {JSON.stringify(item)}
+                                        </div>
+                                    );
+                                });
+                            }
+                            
+                            return validQueueItems.map((item, index) => {
                                 const isCurrentTrack = currentTrackId === item.id;
                                 const isNextTrack = item.id === nextTrackId && !item.isSuggested && !item.isPending;
+                                // Create unique key by combining ID with index to handle duplicates
+                                const uniqueKey = `${item.id}-${index}`;
                             
                             return (
                                 <div
-                                    key={item.id}
+                                    key={uniqueKey}
                                     className="flex items-center gap-2"
                                 >
                                     {/* Reorder controls (edit mode only) - Outside card, left side */}
@@ -677,6 +686,7 @@ function SearchTab({
     };
 
     const handleAddDirect = async (result: any) => {
+        console.log("handleAddDirect called:", result, "ws:", ws, "ws.readyState:", ws?.readyState, "mode:", mode);
         try {
             // For YouTube source, use the YouTube watch URL (not the streaming URL)
             // The YouTube adapter will extract the video ID from this URL
@@ -695,8 +705,11 @@ function SearchTab({
                 artwork: result.thumbnail,
             };
 
+            console.log("handleAddDirect: QueueItem created:", queueItem);
+
             // Send via WebSocket to backend
             if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("handleAddDirect: Sending add_to_queue via WebSocket");
                 ws.send(JSON.stringify({
                     type: "add_to_queue",
                     payload: { item: queueItem }
@@ -704,10 +717,14 @@ function SearchTab({
                 
                 // Switch to queue tab automatically
                 setActiveTab("queue");
-            } else if (onAddToQueue) {
-                // Fallback to callback if WebSocket not available
-                await onAddToQueue(queueItem);
-                setActiveTab("queue");
+            } else {
+                console.warn("handleAddDirect: WebSocket not available or not open. ws:", ws, "readyState:", ws?.readyState);
+                if (onAddToQueue) {
+                    // Fallback to callback if WebSocket not available
+                    console.log("handleAddDirect: Using onAddToQueue callback");
+                    await onAddToQueue(queueItem);
+                    setActiveTab("queue");
+                }
             }
         } catch (error) {
             console.error("Add direct failed:", error);
@@ -765,7 +782,11 @@ function SearchTab({
     };
 
     const handleAddHTML5Direct = async () => {
-        if (!html5Url.trim() || !isUrlValid) return;
+        console.log("handleAddHTML5Direct called:", "ws:", ws, "ws.readyState:", ws?.readyState, "mode:", mode, "html5Url:", html5Url, "isUrlValid:", isUrlValid);
+        if (!html5Url.trim() || !isUrlValid) {
+            console.warn("handleAddHTML5Direct: URL invalid or empty, returning");
+            return;
+        }
         
         const queueItem: QueueItem = {
             id: `html5-${Date.now()}`,
@@ -777,8 +798,11 @@ function SearchTab({
             artwork: "https://placehold.co/800?text=HTML5",
         };
 
+        console.log("handleAddHTML5Direct: QueueItem created:", queueItem);
+
         // Send via WebSocket to backend
         if (ws && ws.readyState === WebSocket.OPEN) {
+            console.log("handleAddHTML5Direct: Sending add_to_queue via WebSocket");
             ws.send(JSON.stringify({
                 type: "add_to_queue",
                 payload: { item: queueItem }
@@ -792,16 +816,20 @@ function SearchTab({
             setHtml5Title("");
             setHtml5Artist("");
             setHtml5Duration(null);
-        } else if (onAddToQueue) {
-            // Fallback to callback if WebSocket not available
-            await onAddToQueue(queueItem);
-            setActiveTab("queue");
-            
-            // Clear form
-            setHtml5Url("");
-            setHtml5Title("");
-            setHtml5Artist("");
-            setHtml5Duration(null);
+        } else {
+            console.warn("handleAddHTML5Direct: WebSocket not available or not open. ws:", ws, "readyState:", ws?.readyState);
+            if (onAddToQueue) {
+                // Fallback to callback if WebSocket not available
+                console.log("handleAddHTML5Direct: Using onAddToQueue callback");
+                await onAddToQueue(queueItem);
+                setActiveTab("queue");
+                
+                // Clear form
+                setHtml5Url("");
+                setHtml5Title("");
+                setHtml5Artist("");
+                setHtml5Duration(null);
+            }
         }
     };
 
@@ -987,9 +1015,9 @@ function SearchTab({
 
                     {searchResults.length > 0 && (
                         <div className="space-y-2">
-                            {searchResults.map((result: any) => (
+                            {searchResults.map((result: any, index: number) => (
                                 <div
-                                    key={result.id}
+                                    key={`${result.id}-${index}`}
                                     className="flex items-center gap-2 min-w-0 w-full"
                                 >
                                     {/* Card - Same design as queue */}

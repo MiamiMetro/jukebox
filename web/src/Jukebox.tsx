@@ -4,66 +4,184 @@ import { Button } from "./components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { StatefulDrawer } from "./components/ui/stateful-drawer";
 import { QueueSearch } from "./components/queue-search";
+import { RoomSelector } from "./components/room-selector";
 import { ListMusic, Users, X } from "lucide-react";
+import { useJukeboxStore } from "./store/jukebox-store";
+import { cn } from "./lib/utils";
 
-// Shared audio player state and websocket logic
-let sharedControls: PlayerControls | null = null;
-let sharedMode: "host" | "listener" = "host";
-let sharedVariant: "full" | "mini" = "full";
-let sharedWs: WebSocket | null = null;
-let sharedTrack: Track | null = null;
-let sharedQueue: import("./components/queue-search").QueueItem[] = [];
-const trackModeRef = { current: "html5" as "html5" | "youtube" };
-
-// Callbacks to update shared state
-let setSharedMode: ((mode: "host" | "listener") => void) | null = null;
-let setSharedVariant: ((variant: "full" | "mini") => void) | null = null;
-let setSharedQueue: ((queue: import("./components/queue-search").QueueItem[]) => void) | null = null;
-
-function AudioPlayerContainer() {
+function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: string; onRoomChange: (room: string) => void }) {
+    // Use Zustand store for shared state
+    const { 
+        setWs: setStoreWs,
+        setControls: setStoreControls,
+        mode,
+        setMode: setStoreMode,
+        setCurrentTrack: setStoreTrack,
+        setQueue: setStoreQueue,
+        trackMode,
+        setRoomUsers: setStoreRoomUsers,
+        setCurrentUser: setStoreCurrentUser,
+    } = useJukeboxStore();
+    
+    // Local state for component-specific needs
     const [track, setTrack] = useState<Track | null>(null);
     const [controls, setControls] = useState<PlayerControls | null>(null);
-    const [mode, setMode] = useState<"host" | "listener">("host");
-    const [variant, setVariant] = useState<"full" | "mini">("full");
-    const [queue, setQueue] = useState<import("./components/queue-search").QueueItem[]>([]);
     const ws = useRef<WebSocket | null>(null);
     const isChangingTrackRef = useRef<boolean>(false);
+    const isConnectingRef = useRef<boolean>(false);
+    const currentRoomRef = useRef<string>("");
 
-    const [trackMode] = useState<"html5" | "youtube">("html5");
-
-    // Keep ref in sync with state
+    // Sync local controls with store
     useEffect(() => {
-        trackModeRef.current = trackMode;
-    }, [trackMode]);
+        setStoreControls(controls);
+    }, [controls, setStoreControls]);
 
-    // Sync with shared state
+    // Sync local track with store
     useEffect(() => {
-        setSharedMode = setMode;
-        setSharedVariant = setVariant;
-        setSharedQueue = setQueue;
-        sharedControls = controls;
-        sharedMode = mode;
-        sharedVariant = variant;
-        sharedWs = ws.current || null;
-        sharedTrack = track;
-        sharedQueue = queue;
-    }, [track, controls, mode, variant, trackMode, queue]);
+        setStoreTrack(track);
+    }, [track, setStoreTrack]);
 
-    const connectToServer = () => {
-        ws.current = new WebSocket("ws://192.168.1.2:8000/ws");
+    // Sync WebSocket with store
+    useEffect(() => {
+        setStoreWs(ws.current);
+    }, [ws.current, setStoreWs]);
+
+    // Reconnect when room changes (only if room is not empty)
+    useEffect(() => {
+        if (!currentRoom || currentRoom.trim() === "") {
+            // No room selected, close connection if exists
+            if (ws.current) {
+                const oldWs = ws.current;
+                ws.current = null;
+                isConnectingRef.current = false;
+                oldWs.close(1000); // Normal closure
+            }
+            currentRoomRef.current = "";
+            // Clear track when room becomes empty
+            setTrack(null);
+            setStoreTrack(null);
+            // Clear queue when leaving room
+            setStoreQueue([]);
+            if (controls) {
+                controls.pause();
+                controls.seek(0);
+            }
+            return;
+        }
+
+        // If room hasn't changed and we have an active connection, don't reconnect
+        if (currentRoom === currentRoomRef.current && ws.current && ws.current.readyState === WebSocket.OPEN) {
+            return;
+        }
+
+        // Prevent multiple simultaneous connections
+        if (isConnectingRef.current) {
+            return;
+        }
+
+        if (controls) {
+            // Store the room we want to connect to
+            const targetRoom = currentRoom;
+            
+            // Clear audio player first when switching rooms
+            console.log("Clearing audio player for room switch");
+            controls.pause();
+            controls.seek(0);
+            setTrack(null);
+            setStoreTrack(null);
+            
+            // Close existing connection properly and wait for cleanup
+            if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+                console.log("Closing existing connection to switch to room:", targetRoom);
+                const oldWs = ws.current;
+                ws.current = null; // Clear reference immediately
+                oldWs.close(1000); // Normal closure code
+            } else if (ws.current && ws.current.readyState === WebSocket.CONNECTING) {
+                // If still connecting, close it
+                console.log("Closing connecting WebSocket to switch to room:", targetRoom);
+                const oldWs = ws.current;
+                ws.current = null;
+                oldWs.close(1000);
+            } else if (ws.current && ws.current.readyState === WebSocket.CLOSED) {
+                // Already closed, just clear it
+                ws.current = null;
+            }
+            
+            // Update ref to new room immediately
+            currentRoomRef.current = targetRoom;
+            
+            // Wait for disconnect to be processed before connecting to new room
+            isConnectingRef.current = true;
+            setTimeout(() => {
+                // Double-check room hasn't changed during timeout
+                // and that we still want to connect to this room
+                if (controls && targetRoom && targetRoom === currentRoomRef.current) {
+                    // Only connect if we don't already have a connection
+                    if (!ws.current || ws.current.readyState === WebSocket.CLOSED) {
+                        console.log("Connecting to new room after timeout:", targetRoom);
+                        connectToServer(targetRoom);
+                    } else {
+                        console.log("Already have connection, skipping");
+                        isConnectingRef.current = false;
+                    }
+                } else {
+                    console.log("Room changed during timeout, aborting connection");
+                    isConnectingRef.current = false;
+                }
+            }, 300);
+        } else if (!controls && currentRoom) {
+            // Controls not ready yet, just update the ref
+            currentRoomRef.current = currentRoom;
+        }
+    }, [currentRoom, controls]);
+
+    const connectToServer = (roomSlug: string) => {
+        console.log("connectToServer called for room:", roomSlug, "current ws state:", ws.current?.readyState);
+        
+        // Prevent duplicate connections
+        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+            console.log("Connection already exists, closing before creating new one");
+            ws.current.close(1000);
+            ws.current = null;
+        }
+        
+        // Clear any closed connections
+        if (ws.current && ws.current.readyState === WebSocket.CLOSED) {
+            console.log("Clearing closed connection");
+            ws.current = null;
+        }
+        
+        // Don't prevent connection if we're switching rooms - that's expected
+        // Only prevent if we're already connecting to the same room
+        if (isConnectingRef.current && ws.current && ws.current.readyState === WebSocket.CONNECTING) {
+            console.log("Already connecting, skipping");
+            return;
+        }
+        
+        console.log("Creating new WebSocket connection to room:", roomSlug);
+        isConnectingRef.current = true;
+        ws.current = new WebSocket(`ws://192.168.1.2:8000/ws/${roomSlug}`);
         ws.current.onmessage = (event) => {
             const data = JSON.parse(event.data);
             console.log("received", data);
-            // Use ref to get the latest trackMode value
-            const currentTrackMode = trackModeRef.current;
+            // Use store trackMode value
+            const currentTrackMode = trackMode;
             if (data.type === "state_sync") {
-                setTrack((prev: Track | null) => {
-                    const trackData = data.payload.track;
-                    if (!trackData) return prev;
-
+                const trackData = data.payload.track;
+                
+                // First, clear the audio player
+                controls?.pause();
+                controls?.seek(0);
+                setTrack(null);
+                setStoreTrack(null);
+                
+                // Then, if there's a track in the new room, load it
+                if (trackData) {
+                    let newTrack: Track;
+                    
                     // Backend now sends full track object
                     if (typeof trackData === "object" && trackData.url) {
-                        return {
+                        newTrack = {
                             id: trackData.id || "1",
                             title: trackData.title || "Unknown",
                             artist: trackData.artist || "Unknown Artist",
@@ -71,27 +189,31 @@ function AudioPlayerContainer() {
                             artwork: trackData.artwork || undefined,
                             url: trackData.url,
                         } as Track;
+                    } else {
+                        // Fallback for old format (just URL string)
+                        newTrack = {
+                            id: "1",
+                            title: "Unknown",
+                            artist: "Unknown Artist",
+                            source: currentTrackMode,
+                            artwork: undefined,
+                            url: typeof trackData === "string" ? trackData : "",
+                        } as Track;
                     }
-
-                    // Fallback for old format (just URL string)
-                    return {
-                        id: "1",
-                        title: "Unknown",
-                        artist: "Unknown Artist",
-                        source: currentTrackMode,
-                        artwork: undefined,
-                        url: typeof trackData === "string" ? trackData : "",
-                    } as Track;
-                });
-
-
-                controls?.seek(data.payload.position);
-                console.log("seeked", data.payload.position);
-                if (data.payload.is_playing === true) {
-                    const serverTime = data.server_time;
-                    const currentPos = serverTime - data.payload.start_time;
-                    controls?.seek(Math.max(0, currentPos));
-                    controls?.play();
+                    
+                    // Set the new track
+                    setTrack(newTrack);
+                    setStoreTrack(newTrack);
+                    
+                    // Seek to position and play if needed
+                    controls?.seek(data.payload.position || 0);
+                    console.log("seeked", data.payload.position || 0);
+                    if (data.payload.is_playing === true) {
+                        const serverTime = data.server_time;
+                        const currentPos = serverTime - data.payload.start_time;
+                        controls?.seek(Math.max(0, currentPos));
+                        controls?.play();
+                    }
                 }
             } else if (data.type === "play" && data.payload && data.payload.start_time) {
                 const serverTime = data.server_time;
@@ -152,9 +274,67 @@ function AudioPlayerContainer() {
                 } else {
                     controls?.pause();
                 }
+            } else if (data.type === "user_info") {
+                // Update mode based on backend role
+                const isHost = data.payload?.is_host || false;
+                const isModerator = data.payload?.is_moderator || false;
+                // If user is host or moderator, they're in "host" mode, otherwise "listener"
+                const newMode = (isHost || isModerator) ? "host" : "listener";
+                // Always update mode when receiving user_info (even if same, to handle room switches)
+                console.log("Mode updated from backend:", newMode, "is_host:", isHost, "is_moderator:", isModerator);
+                setStoreMode(newMode);
+                
+                // Store current user info for "myself" indicator (from user_info message)
+                // Always update role from the payload to reflect current status (important when host leaves and new host is assigned)
+                if (data.payload?.client_ip && data.payload?.client_port !== undefined) {
+                    const newRole = isHost ? "host" : (isModerator ? "moderator" : "listener");
+                    setStoreCurrentUser({
+                        name: data.payload.name || "No name",
+                        role: newRole, // Use role derived from is_host/is_moderator flags
+                        client_ip: data.payload.client_ip,
+                        client_port: data.payload.client_port,
+                    });
+                    console.log("Updated currentUser role to:", newRole, "from user_info", "is_host:", isHost, "is_moderator:", isModerator);
+                } else {
+                    // Even if IP/port not provided, update role if we have currentUser
+                    const newRole = isHost ? "host" : (isModerator ? "moderator" : "listener");
+                    // Get current user from store and update it
+                    const { currentUser: prevUser } = useJukeboxStore.getState();
+                    if (prevUser) {
+                        setStoreCurrentUser({
+                            ...prevUser,
+                            role: newRole,
+                        });
+                        console.log("Updated currentUser role to:", newRole, "from user_info (no IP/port)");
+                    }
+                }
+            } else if (data.type === "users_sync") {
+                // Update room users list from WebSocket
+                const users = data.payload?.users || [];
+                console.log("Received users_sync:", users);
+                setStoreRoomUsers(users);
+                
+                // Update currentUser role from users list if it matches
+                // This ensures role is updated even if user_info message was missed
+                const { currentUser: prevUser } = useJukeboxStore.getState();
+                if (prevUser) {
+                    const matchingUser = users.find((u: any) => 
+                        u.client_ip === prevUser.client_ip && 
+                        String(u.client_port) === String(prevUser.client_port)
+                    );
+                    if (matchingUser && matchingUser.role !== prevUser.role) {
+                        const newRole = matchingUser.is_host ? "host" : (matchingUser.is_moderator ? "moderator" : "listener");
+                        setStoreCurrentUser({
+                            ...prevUser,
+                            role: newRole,
+                        });
+                        console.log("Updated currentUser role from users_sync:", newRole);
+                    }
+                }
             } else if (data.type === "queue_sync") {
                 // Handle queue sync from backend
                 const backendQueue = data.payload.queue || [];
+                console.log("Received queue_sync:", backendQueue);
                 // Convert backend queue format to QueueItem format
                 const queueItems: import("./components/queue-search").QueueItem[] = backendQueue.map((item: any) => ({
                     id: String(item.id || ""),
@@ -170,7 +350,8 @@ function AudioPlayerContainer() {
                     isPending: item.isPending || false,
                     video_id: item.video_id,
                 }));
-                setQueue(queueItems);
+                console.log("Setting queue items:", queueItems);
+                setStoreQueue(queueItems);
             } else if (data.type === "next-track") {
                 const trackData = data.payload.track;
                 const state = controls?.getState();
@@ -264,43 +445,58 @@ function AudioPlayerContainer() {
             }
         };
 
-        ws.current.onopen = () => {
-            console.log("socket opened");
-            // Request current queue when connected
-            ws.current?.send(JSON.stringify({ type: "get_queue" }));
-        };
+            ws.current.onopen = () => {
+                console.log("socket opened to room:", roomSlug);
+                isConnectingRef.current = false;
+                // Update store WebSocket reference immediately
+                setStoreWs(ws.current);
+                // Request current queue and state when connected
+                ws.current?.send(JSON.stringify({ type: "get_queue" }));
+                ws.current?.send(JSON.stringify({ type: "get_state" }));
+            };
 
         ws.current.onclose = (event) => {
-            console.log("socket closed", event);
+            console.log("socket closed", event, "for room", roomSlug);
+            isConnectingRef.current = false;
+            // Clear connection reference
+            const wasThisConnection = ws.current && ws.current.readyState === WebSocket.CLOSED;
+            if (wasThisConnection) {
+                ws.current = null;
+            }
+            // Clear current room when connection is lost (unless it was intentional disconnect)
+            // Check if this was a normal close (code 1000) or an error/abnormal close
+            // Code 1000 = normal closure, 1001 = going away, 1006 = abnormal closure
+            // Only clear room if it's an abnormal close AND we're not switching rooms
+            if (event.code !== 1000 && event.code !== 1001) {
+                // Abnormal close (network error, server crash, etc.) - clear current room
+                // But only if we're not in the process of switching rooms
+                setTimeout(() => {
+                    // Check if room hasn't changed (meaning we're not switching)
+                    if (currentRoomRef.current === roomSlug) {
+                        onRoomChange("");
+                    }
+                }, 100);
+            }
         };
 
         ws.current.onerror = (event) => {
             console.log("socket error", event);
+            isConnectingRef.current = false;
+            // On error, clear current room after a short delay
+            setTimeout(() => {
+                onRoomChange("");
+            }, 100);
         };
     };
 
-    // Connect only after controls are ready
-    useEffect(() => {
-        if (controls && !ws.current) {
-            console.log("connecting to server");
-            connectToServer();
-        }
-        return () => {
-            // cleanup on unmount
-            if (!controls && ws.current) {
-                console.log("disconnecting from server");
-                ws.current.close();
-                ws.current = null;
-            }
-        };
-    }, [controls]);
+    // Connect only after controls are ready AND a room is selected
+    // This is handled by the room change effect above, so we don't need a separate effect here
 
     return (
         <div className="h-full flex flex-col">
             <AudioPlayer
                 track={track}
                 mode={mode}
-                variant={variant}
                 onNext={() => console.log("Next track")}
                 onPrevious={() => console.log("Previous track")}
                 onPlayerReady={(playerControls) => setControls(playerControls)}
@@ -353,39 +549,30 @@ function AudioPlayerContainer() {
     );
 }
 
-function MiddleBottom() {
+function MiddleBottom({ currentRoom }: { currentRoom: string }) {
+    const { controls, ws } = useJukeboxStore();
+    
     return (
         <div className="h-full overflow-y-auto">
             <h2 className="text-2xl font-semibold mb-4">Home</h2>
             
             {/* Debug buttons */}
             <div className="flex flex-wrap gap-2">
-                <Button onClick={() => {
-                    const state = sharedControls?.getState();
-                    console.log("state", state);
-                    const newMode = sharedMode === "host" ? "listener" : "host";
-                    if (setSharedMode) setSharedMode(newMode);
-                }}>Mode</Button>
 
                 <Button onClick={() => {
-                    const newVariant = sharedVariant === "full" ? "mini" : "full";
-                    if (setSharedVariant) setSharedVariant(newVariant);
-                }}>Variant</Button>
-
-                <Button onClick={() => {
-                    const state = sharedControls?.getState();
+                    const state = controls?.getState();
                     console.log("state", state);
                 }}>Get State</Button>
 
                 <Button onClick={() => {
-                    sharedControls?.play();
+                    controls?.play();
                 }}>Play</Button>
 
                 <Button onClick={() => {
                     const data = {
                         type: "get_state",
                     };
-                    sharedWs?.send(JSON.stringify(data));
+                    ws?.send(JSON.stringify(data));
                     console.log("sent", data);
                 }}>Sync</Button>
 
@@ -393,9 +580,32 @@ function MiddleBottom() {
                     const data = {
                         type: "next-track",
                     };
-                    sharedWs?.send(JSON.stringify(data));
+                    ws?.send(JSON.stringify(data));
                     console.log("sent", data);
                 }}>Next Track</Button>
+
+                <Button onClick={async () => {
+                    if (!currentRoom || currentRoom.trim() === "") {
+                        console.log("No room selected");
+                        return;
+                    }
+                    
+                    try {
+                        const response = await fetch(`http://192.168.1.2:8000/api/rooms/${encodeURIComponent(currentRoom)}/users`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            console.log(`Current room (${currentRoom}) users:`, data.users);
+                            console.log(`Total users: ${data.users.length}`);
+                            data.users.forEach((user: any, index: number) => {
+                                console.log(`User ${index + 1}:`, user);
+                            });
+                        } else {
+                            console.error("Failed to get users, status:", response.status);
+                        }
+                    } catch (error) {
+                        console.error("Failed to get users:", error);
+                    }
+                }}>Debug: Get Current Room Users</Button>
             </div>
         </div>
     );
@@ -403,47 +613,76 @@ function MiddleBottom() {
 
 // Left Sidebar Content Component - Always mounted, state preserved
 function LeftSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean; onClose?: () => void }) {
-    const [currentTrackId, setCurrentTrackId] = useState<string | null>(sharedTrack?.id || null);
-    const [queue, setQueue] = useState<import("./components/queue-search").QueueItem[]>(sharedQueue || []);
-    
-    // Sync with shared track
-    useEffect(() => {
-        const interval = setInterval(() => {
-            if (sharedTrack?.id !== currentTrackId) {
-                setCurrentTrackId(sharedTrack?.id || null);
-            }
-            if (sharedQueue !== queue) {
-                setQueue(sharedQueue || []);
-            }
-        }, 100);
-        return () => clearInterval(interval);
-    }, [currentTrackId, queue]);
+    // Use Zustand store - automatically re-renders when state changes
+    const { currentTrack, queue, mode, ws } = useJukeboxStore();
+    const currentTrackId = currentTrack?.id || null;
     
     return (
         <div className="h-full flex flex-col min-h-0">
             <QueueSearch 
-                mode={sharedMode || "host"} 
+                mode={mode} 
                 isDrawer={isDrawer}
                 onClose={onClose}
                 currentTrackId={currentTrackId}
                 queueItems={queue}
-                ws={sharedWs}
-                onModeChange={(newMode) => {
-                    // Debug: Update shared mode when toggle is used
-                    if (setSharedMode) {
-                        setSharedMode(newMode);
-                    }
-                    sharedMode = newMode;
-                }}
+                ws={ws}
             />
         </div>
     );
 }
 
 // Right Sidebar Content Component - Always mounted, state preserved
-function RightSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean; onClose?: () => void }) {
-    const [selectedTab, setSelectedTab] = useState("info");
-    const [notes, setNotes] = useState("");
+function RightSidebarContent({ 
+    isDrawer = false, 
+    onClose,
+    currentRoom,
+    onRoomChange 
+}: { 
+    isDrawer?: boolean; 
+    onClose?: () => void;
+    currentRoom: string;
+    onRoomChange: (room: string) => void;
+}) {
+    // Use Zustand store for WebSocket and users
+    const { ws, roomUsers, currentUser } = useJukeboxStore();
+    
+    const handleToggleModerator = (targetUser: {
+        name: string;
+        role: string;
+        client_ip: string;
+        client_port?: string | number;
+        is_host: boolean;
+        is_moderator: boolean;
+    }) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.warn("WebSocket not available for toggle moderator");
+            return;
+        }
+        
+        // Don't allow toggling moderator for yourself or the host
+        if (targetUser.is_host) {
+            console.warn("Cannot change moderator status for host");
+            return;
+        }
+        
+        const isCurrentlyModerator = targetUser.is_moderator;
+        const newRole = isCurrentlyModerator ? "listener" : "moderator";
+        
+        console.log("Toggling moderator for user:", targetUser.name, "new role:", newRole);
+        
+        ws.send(JSON.stringify({
+            type: "set_moderator",
+            payload: {
+                client_ip: targetUser.client_ip,
+                client_port: targetUser.client_port,
+                is_moderator: !isCurrentlyModerator,
+            }
+        }));
+    };
+
+    const handleRoomChange = (newRoom: string) => {
+        onRoomChange(newRoom);
+    };
     
     return (
         <div className="h-full flex flex-col min-h-0">
@@ -451,9 +690,9 @@ function RightSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean
             <div className="p-4 border-b">
                 <div className="flex items-start justify-between mb-2">
                     <div>
-                        <h2 className="text-2xl font-bold">Right Sidebar</h2>
+                        <h2 className="text-2xl font-bold">Room Settings</h2>
                         <p className="text-sm text-muted-foreground mt-1">
-                            Additional information
+                            Join or create rooms
                         </p>
                     </div>
                     {/* Close button - only show in drawer mode */}
@@ -471,44 +710,83 @@ function RightSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean
             </div>
             
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4">
-                {/* Example state that will be preserved */}
-                <div className="space-y-4">
-                    <div>
-                        <label className="text-sm font-medium mb-2 block">Tabs (state preserved)</label>
-                        <div className="flex gap-2">
-                            <Button
-                                variant={selectedTab === "info" ? "default" : "outline"}
-                                size="sm"
-                                onClick={() => setSelectedTab("info")}
-                            >
-                                Info
-                            </Button>
-                            <Button
-                                variant={selectedTab === "notes" ? "default" : "outline"}
-                                size="sm"
-                                onClick={() => setSelectedTab("notes")}
-                            >
-                                Notes
-                            </Button>
-                        </div>
-                        <div className="mt-2 p-2 bg-muted rounded">
-                            {selectedTab === "info" ? "Information tab selected" : "Notes tab selected"}
-                        </div>
-                    </div>
-                    
-                    <div>
-                        <label className="text-sm font-medium mb-2 block">Notes (state preserved)</label>
-                        <textarea
-                            value={notes}
-                            onChange={(e) => setNotes(e.target.value)}
-                            placeholder="Write notes here..."
-                            className="w-full px-3 py-2 border rounded-md min-h-[100px]"
-                        />
-                    </div>
-                </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <RoomSelector
+                    ws={ws}
+                    currentRoom={currentRoom}
+                    onRoomChange={handleRoomChange}
+                />
                 
-                {/* Right sidebar content can go here */}
+                {/* Users List */}
+                {currentRoom && currentRoom.trim() !== "" && (
+                    <div className="mt-4">
+                        <h3 className="text-lg font-semibold mb-2">Users ({roomUsers.length})</h3>
+                        {roomUsers.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No users in room</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {roomUsers.map((user: {
+                                    name: string;
+                                    role: string;
+                                    client_ip: string;
+                                    client_port?: string | number;
+                                    is_host: boolean;
+                                    is_moderator: boolean;
+                                }, index: number) => {
+                                    const isMyself = currentUser && 
+                                        user.client_ip === currentUser.client_ip && 
+                                        String(user.client_port) === String(currentUser.client_port);
+                                    
+                                    // Only hosts (not moderators) can set moderator status
+                                    const isCurrentUserHost = currentUser?.role === "host";
+                                    const canToggleModerator = isCurrentUserHost && !user.is_host && !isMyself;
+                                    
+                                    return (
+                                        <div 
+                                            key={`${user.client_ip}-${user.client_port}-${index}`}
+                                            className={cn(
+                                                "p-3 border rounded-lg",
+                                                isMyself ? "bg-primary/10 border-primary" : "bg-muted/50"
+                                            )}
+                                        >
+                                            <div className="flex items-center justify-between mb-1">
+                                                <div className="flex items-center gap-2">
+                                                    {/* Checkbox for hosts to make moderators */}
+                                                    {canToggleModerator && (
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={user.is_moderator}
+                                                            onChange={() => handleToggleModerator(user)}
+                                                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                                                        />
+                                                    )}
+                                                    <span className="font-medium">
+                                                        {user.name}
+                                                        {isMyself && (
+                                                            <span className="ml-2 text-xs text-primary font-semibold">(You)</span>
+                                                        )}
+                                                    </span>
+                                                    <span className={cn(
+                                                        "text-xs px-2 py-0.5 rounded",
+                                                        user.role === "host" && "bg-primary text-primary-foreground",
+                                                        user.role === "moderator" && "bg-blue-500 text-white",
+                                                        user.role === "listener" && "bg-muted text-muted-foreground"
+                                                    )}>
+                                                        {user.role}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="text-xs text-muted-foreground space-y-0.5">
+                                                <div>IP: {user.client_ip}</div>
+                                                <div>Port: {user.client_port}</div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -517,6 +795,7 @@ function RightSidebarContent({ isDrawer = false, onClose }: { isDrawer?: boolean
 function Jukebox() {
     const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
     const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
+    const [currentRoom, setCurrentRoom] = useState("");
 
     return (
         <div className="h-screen flex flex-col overflow-hidden">
@@ -534,7 +813,12 @@ function Jukebox() {
                 onOpenChange={setRightDrawerOpen}
                 direction="right"
             >
-                <RightSidebarContent isDrawer={true} onClose={() => setRightDrawerOpen(false)} />
+                <RightSidebarContent 
+                    isDrawer={true} 
+                    onClose={() => setRightDrawerOpen(false)}
+                    currentRoom={currentRoom}
+                    onRoomChange={setCurrentRoom}
+                />
             </StatefulDrawer>
 
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] grid-rows-[auto_1fr] gap-4 p-4 min-h-0">
@@ -573,17 +857,20 @@ function Jukebox() {
                         <h1 className="text-xl font-bold">Jukebox</h1>
                     </div>
                     
-                    <AudioPlayerContainer />
+                    <AudioPlayerContainer currentRoom={currentRoom} onRoomChange={setCurrentRoom} />
                 </div>
 
                 {/* Bottom Middle - Content Area */}
                 <div className="col-start-1 lg:col-start-2 row-start-2 bg-card border rounded-lg p-4 overflow-y-auto">
-                    <MiddleBottom />
+                    <MiddleBottom currentRoom={currentRoom} />
                 </div>
 
                 {/* Right Sidebar - Desktop */}
                 <div className="hidden lg:block col-start-3 row-start-1 row-end-3 bg-card border rounded-lg overflow-hidden flex flex-col min-h-0">
-                    <RightSidebarContent />
+                    <RightSidebarContent 
+                        currentRoom={currentRoom}
+                        onRoomChange={setCurrentRoom}
+                    />
                 </div>
             </div>
         </div>
