@@ -21,6 +21,8 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
         trackMode,
         setRoomUsers: setStoreRoomUsers,
         setCurrentUser: setStoreCurrentUser,
+        setUsersTotal: setStoreUsersTotal,
+        setLastReceivedUsersPage: setStoreLastReceivedUsersPage,
     } = useJukeboxStore();
     
     // Local state for component-specific needs
@@ -318,16 +320,40 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                     }
                 }
             } else if (data.type === "users_sync") {
-                // Update room users list from WebSocket
+                // Handle paginated users list from WebSocket
                 const users = data.payload?.users || [];
-                console.log("Received users_sync:", users);
-                setStoreRoomUsers(users);
+                const page = data.payload?.page ?? 0;
+                const total = data.payload?.total ?? users.length;
+                const hasMore = data.payload?.has_more ?? false;
+                
+                console.log("Received users_sync:", { users, page, total, hasMore });
+                
+                // If it's the first page (page 0), replace the list, otherwise append
+                if (page === 0) {
+                    setStoreRoomUsers(users);
+                } else {
+                    // Get current users from store and merge
+                    const { roomUsers: prevUsers } = useJukeboxStore.getState();
+                    // Merge new users, avoiding duplicates based on client_ip and client_port
+                    const existingKeys = new Set(
+                        prevUsers.map((u: any) => `${u.client_ip}:${u.client_port}`)
+                    );
+                    const newUsers = users.filter(
+                        (u: any) => !existingKeys.has(`${u.client_ip}:${u.client_port}`)
+                    );
+                    setStoreRoomUsers([...prevUsers, ...newUsers]);
+                }
+                
+                setStoreUsersTotal(total);
+                setStoreLastReceivedUsersPage(page);
                 
                 // Update currentUser role from users list if it matches
                 // This ensures role is updated even if user_info message was missed
                 const { currentUser: prevUser } = useJukeboxStore.getState();
                 if (prevUser) {
-                    const matchingUser = users.find((u: any) => 
+                    // Check all users (including newly received ones)
+                    const allUsers = page === 0 ? users : [...useJukeboxStore.getState().roomUsers, ...users];
+                    const matchingUser = allUsers.find((u: any) => 
                         u.client_ip === prevUser.client_ip && 
                         String(u.client_port) === String(prevUser.client_port)
                     );
@@ -687,7 +713,83 @@ function RightSidebarContent({
     onRoomChange: (room: string) => void;
 }) {
     // Use Zustand store for WebSocket and users
-    const { ws, roomUsers, currentUser } = useJukeboxStore();
+    const { ws, roomUsers, currentUser, usersTotal, setRoomUsers, setUsersTotal, lastReceivedUsersPage } = useJukeboxStore();
+    const [currentPage, setCurrentPage] = useState(0);
+    const [hasMoreUsers, setHasMoreUsers] = useState(false);
+    const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+    const usersListRef = useRef<HTMLDivElement>(null);
+    const loadingUsersPagesRef = useRef<Set<number>>(new Set());
+    const USERS_PER_PAGE = 10;
+    
+    // Reset pagination when room changes
+    useEffect(() => {
+        setCurrentPage(0);
+        setRoomUsers([]);
+        setUsersTotal(0);
+        setHasMoreUsers(false);
+        loadingUsersPagesRef.current.clear();
+        
+        // Request first page when room changes
+        if (currentRoom && currentRoom.trim() !== "" && ws && ws.readyState === WebSocket.OPEN) {
+            if (!loadingUsersPagesRef.current.has(0)) {
+                loadingUsersPagesRef.current.add(0);
+                ws.send(JSON.stringify({
+                    type: "get_users",
+                    payload: {
+                        page: 0,
+                        limit: USERS_PER_PAGE,
+                    }
+                }));
+            }
+        }
+    }, [currentRoom, ws, setRoomUsers, setUsersTotal]);
+    
+    // Handle infinite scroll for users list
+    useEffect(() => {
+        const usersListElement = usersListRef.current;
+        if (!usersListElement) return;
+        
+        const handleScroll = () => {
+            const { scrollTop, scrollHeight, clientHeight } = usersListElement;
+            // Load more when scrolled to within 100px of bottom
+            if (scrollHeight - scrollTop - clientHeight < 100 && hasMoreUsers && !isLoadingUsers && ws && ws.readyState === WebSocket.OPEN) {
+                const nextPage = currentPage + 1;
+                // Prevent duplicate requests for the same page
+                if (loadingUsersPagesRef.current.has(nextPage)) {
+                    return;
+                }
+                
+                loadingUsersPagesRef.current.add(nextPage);
+                setIsLoadingUsers(true);
+                setCurrentPage(nextPage);
+                
+                ws.send(JSON.stringify({
+                    type: "get_users",
+                    payload: {
+                        page: nextPage,
+                        limit: USERS_PER_PAGE,
+                    }
+                }));
+            }
+        };
+        
+        usersListElement.addEventListener("scroll", handleScroll);
+        return () => usersListElement.removeEventListener("scroll", handleScroll);
+    }, [hasMoreUsers, isLoadingUsers, currentPage, ws]);
+    
+    // Update hasMoreUsers when usersTotal changes and clear loading state
+    useEffect(() => {
+        setHasMoreUsers(roomUsers.length < usersTotal);
+        setIsLoadingUsers(false);
+    }, [roomUsers.length, usersTotal]);
+    
+    // Clear loading page ref when users are received (prevents stuck loading states)
+    useEffect(() => {
+        // Clear the page that was just received from the loading set
+        if (lastReceivedUsersPage !== null) {
+            loadingUsersPagesRef.current.delete(lastReceivedUsersPage);
+        }
+    }, [lastReceivedUsersPage]);
     
     const handleToggleModerator = (targetUser: {
         name: string;
@@ -762,12 +864,15 @@ function RightSidebarContent({
                 
                 {/* Users List */}
                 {currentRoom && currentRoom.trim() !== "" && (
-                    <div className="mt-4">
-                        <h3 className="text-lg font-semibold mb-2">Users ({roomUsers.length})</h3>
-                        {roomUsers.length === 0 ? (
+                    <div className="mt-4 flex flex-col flex-1 min-h-0">
+                        <h3 className="text-lg font-semibold mb-2 shrink-0">Users ({usersTotal > 0 ? usersTotal : roomUsers.length})</h3>
+                        {roomUsers.length === 0 && !isLoadingUsers ? (
                             <p className="text-sm text-muted-foreground">No users in room</p>
                         ) : (
-                            <div className="space-y-2">
+                            <div 
+                                ref={usersListRef}
+                                className="space-y-2 overflow-y-auto flex-1 min-h-0"
+                            >
                                 {roomUsers.map((user: {
                                     name: string;
                                     role: string;
@@ -826,6 +931,16 @@ function RightSidebarContent({
                                         </div>
                                     );
                                 })}
+                                {isLoadingUsers && (
+                                    <div className="text-center py-2 text-sm text-muted-foreground">
+                                        Loading more users...
+                                    </div>
+                                )}
+                                {hasMoreUsers && !isLoadingUsers && (
+                                    <div className="text-center py-2 text-sm text-muted-foreground">
+                                        Scroll for more users...
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

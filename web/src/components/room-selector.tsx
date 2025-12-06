@@ -32,6 +32,7 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
     const dropdownRef = useRef<HTMLDivElement>(null);
     const observerTarget = useRef<HTMLDivElement>(null);
     const loadRoomsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const loadingPagesRef = useRef<Set<number>>(new Set());
 
     // Update search query when currentRoom changes
     useEffect(() => {
@@ -79,10 +80,11 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
     // Load rooms when dropdown opens - using REST API
     const loadRooms = useCallback(async (pageNum: number = 0, search: string = "") => {
         // Prevent duplicate requests for the same page
-        if (isLoading) {
+        if (loadingPagesRef.current.has(pageNum)) {
             return;
         }
 
+        loadingPagesRef.current.add(pageNum);
         setIsLoading(true);
         
         try {
@@ -111,7 +113,7 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
                 setRooms(prev => {
                     // Prevent duplicates
                     const existingSlugs = new Set(prev.map(r => r.slug));
-                    const newRooms = data.rooms.filter(r => !existingSlugs.has(r.slug));
+                    const newRooms = data.rooms.filter((r: Room) => !existingSlugs.has(r.slug));
                     return [...prev, ...newRooms];
                 });
             }
@@ -119,15 +121,17 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
             // Use backend's has_more directly (no filtering means no adjustment needed)
             setHasMore(data.has_more);
             setIsLoading(false);
+            loadingPagesRef.current.delete(pageNum);
         } catch (error) {
             console.error("Failed to load rooms:", error);
             setIsLoading(false);
+            loadingPagesRef.current.delete(pageNum);
             if (pageNum === 0) {
                 setRooms([]);
             }
             setHasMore(false);
         }
-    }, [isLoading, currentRoom]);
+    }, [currentRoom]);
 
     // Fetch current room info when it changes
     useEffect(() => {
@@ -168,6 +172,7 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
         setPage(0);
         setRooms([]);
         setHasMore(true);
+        loadingPagesRef.current.clear();
         setIsOpen(true);
         loadRooms(0, ""); // Load all rooms when opening
     };
@@ -189,8 +194,10 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
                     // Use functional update to get latest page value
                     setPage((currentPage) => {
                         const nextPage = currentPage + 1;
-                        // Load next page
-                        loadRooms(nextPage, searchQuery);
+                        // Prevent duplicate requests
+                        if (!loadingPagesRef.current.has(nextPage)) {
+                            loadRooms(nextPage, searchQuery);
+                        }
                         return nextPage;
                     });
                 }
@@ -230,6 +237,7 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
         setPage(0); // Reset to first page
         setRooms([]); // Clear existing rooms
         setHasMore(true); // Reset hasMore flag
+        loadingPagesRef.current.clear(); // Clear loading pages
         
         // Open dropdown when user starts typing
         if (!isOpen && value.trim() !== "") {
@@ -275,6 +283,7 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
             setPage(0);
             setRooms([]);
             setHasMore(true);
+            loadingPagesRef.current.clear();
             setIsOpen(true);
             loadRooms(0, ""); // Load all rooms when opening
         }

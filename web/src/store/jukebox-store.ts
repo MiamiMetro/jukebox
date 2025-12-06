@@ -59,6 +59,18 @@ interface JukeboxStore {
         is_host: boolean;
         is_moderator: boolean;
     }>) => void;
+    addRoomUsers: (users: Array<{
+        name: string;
+        role: string;
+        client_ip: string;
+        client_port?: string | number;
+        is_host: boolean;
+        is_moderator: boolean;
+    }>) => void;
+    usersTotal: number;
+    setUsersTotal: (total: number) => void;
+    lastReceivedUsersPage: number | null;
+    setLastReceivedUsersPage: (page: number | null) => void;
 }
 
 export const useJukeboxStore = create<JukeboxStore>((set) => ({
@@ -85,5 +97,19 @@ export const useJukeboxStore = create<JukeboxStore>((set) => ({
     
     roomUsers: [],
     setRoomUsers: (users) => set({ roomUsers: users }),
+    addRoomUsers: (users) => set((state) => {
+        // Merge new users, avoiding duplicates based on client_ip and client_port
+        const existingKeys = new Set(
+            state.roomUsers.map(u => `${u.client_ip}:${u.client_port}`)
+        );
+        const newUsers = users.filter(
+            u => !existingKeys.has(`${u.client_ip}:${u.client_port}`)
+        );
+        return { roomUsers: [...state.roomUsers, ...newUsers] };
+    }),
+    usersTotal: 0,
+    setUsersTotal: (total) => set({ usersTotal: total }),
+    lastReceivedUsersPage: null,
+    setLastReceivedUsersPage: (page) => set({ lastReceivedUsersPage: page }),
 }));
 

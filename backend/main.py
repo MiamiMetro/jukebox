@@ -116,8 +116,8 @@ class Room:
             await self.broadcast_users()
     
     
-    async def broadcast_users(self):
-        """Broadcast current user list to all users in room"""
+    def get_active_users(self):
+        """Get list of active users"""
         active_users = []
         for ws_user, user_obj in self.users.items():
             if ws_user.client_state.name == "CONNECTED":
@@ -130,10 +130,46 @@ class Room:
                     "is_host": user_obj.role == "host",
                     "is_moderator": user_obj.role in ("host", "moderator"),
                 })
+        return active_users
+    
+    async def broadcast_users(self):
+        """Broadcast current user list to all users in room (sends first page for consistency)"""
+        active_users = self.get_active_users()
+        total = len(active_users)
+        # Send first 10 users (first page)
+        page_users = active_users[:10]
+        has_more = total > 10
         
         await self.broadcast({
             "type": "users_sync",
-            "payload": {"users": active_users},
+            "payload": {
+                "users": page_users,
+                "page": 0,
+                "limit": 10,
+                "has_more": has_more,
+                "total": total,
+            },
+            "server_time": time.time()
+        })
+    
+    async def send_users_page(self, ws: WebSocket, page: int = 0, limit: int = 10):
+        """Send a paginated page of users to a specific WebSocket"""
+        active_users = self.get_active_users()
+        total = len(active_users)
+        start_idx = page * limit
+        end_idx = start_idx + limit
+        page_users = active_users[start_idx:end_idx]
+        has_more = end_idx < total
+        
+        await ws.send_json({
+            "type": "users_sync",
+            "payload": {
+                "users": page_users,
+                "page": page,
+                "limit": limit,
+                "has_more": has_more,
+                "total": total,
+            },
             "server_time": time.time()
         })
     
@@ -486,35 +522,32 @@ async def get_rooms(page: int = 0, limit: int = 5, search: str = ""):
     }
 
 @app.get("/api/rooms/{slug}/users")
-async def get_room_users(slug: str):
+async def get_room_users(slug: str, page: int = 0, limit: int = 10):
     """
-    Get list of users in a specific room.
+    Get list of users in a specific room with pagination.
     Only returns users with active WebSocket connections.
     """
     if slug not in rooms:
-        return {"error": "Room not found", "users": []}
+        return {"error": "Room not found", "users": [], "page": page, "limit": limit, "has_more": False, "total": 0}
     
     room = rooms[slug]
+    active_users = room.get_active_users()
     
-    # Get only active users
-    active_users = []
-    for ws, user in room.users.items():
-        if ws.client_state.name == "CONNECTED":
-            # Get client port from WebSocket
-            client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
-            active_users.append({
-                "name": user.name,
-                "role": user.role,
-                "client_ip": user.client_ip,
-                "client_port": client_port,
-                "is_host": user.role == "host",
-                "is_moderator": user.role in ("host", "moderator"),
-            })
+    # Paginate
+    total = len(active_users)
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_users = active_users[start_idx:end_idx]
+    has_more = end_idx < total
     
     return {
         "slug": slug,
-        "users": active_users,
-        "user_count": len(active_users),
+        "users": page_users,
+        "user_count": total,
+        "page": page,
+        "limit": limit,
+        "has_more": has_more,
+        "total": total,
     }
 
 # Mount static files (HTML files in the backend directory)
@@ -850,8 +883,10 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                 })
 
             elif t == "get_users":
-                # Send current user list
-                await room.broadcast_users()
+                # Send paginated user list
+                page = data.get("payload", {}).get("page", 0)
+                limit = data.get("payload", {}).get("limit", 10)
+                await room.send_users_page(ws, page, limit)
             elif t == "set_moderator":
                 # Only hosts can set moderator status (not moderators)
                 user = room.get_user(ws)
