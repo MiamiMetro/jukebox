@@ -14,7 +14,6 @@ import {
   SkipForward,
   Shuffle,
   Repeat,
-  Repeat1,
   Undo2,
   Redo2,
 } from "lucide-react"
@@ -34,12 +33,11 @@ interface AudioPlayerProps {
     onSeek?: (time: number) => void
     onVolumeChange?: (volume: number) => void
     onMuteChange?: (isMuted: boolean) => void
-    onShuffleChange?: (enabled: boolean) => void
-    onRepeatChange?: (mode: "off" | "all" | "one") => void
+    onShuffleChange?: () => void
+    onRepeatChange?: () => void
     onTimeUpdate?: (time: number) => void
     onDurationChange?: (duration: number) => void
     onBufferingChange?: (isBuffering: boolean) => void
-    onModeChangeRequest?: (newMode: PlayerMode) => void
   }
   liveTime?: number
   className?: string
@@ -96,7 +94,6 @@ export function AudioPlayer({
   const wasPlayingBeforeSeekRef = useRef<boolean>(false)
   const isSeekingRef = useRef<boolean>(false)
   const isMobile = useIsMobile()
-  const [forceMobileLayout, setForceMobileLayout] = useState(false)
   const playerRef = useRef<HTMLDivElement>(null)
   const volumeSliderRef = useRef<HTMLDivElement>(null)
   const progressSliderRef = useRef<HTMLDivElement>(null)
@@ -342,28 +339,16 @@ export function AudioPlayer({
     const next = !playerState.isMuted
     toggleMute()
     events?.onMuteChange?.(next)
-    // When unmuting (mute button goes up), change to listener mode and mobile layout
-    if (next === false) {
-      // Unmuted - trigger mode change to listener
-      // This will be handled by the parent component via a callback
-      if (events?.onMuteChange) {
-        // The parent can listen to this and change mode
-      }
-    }
   }
 
-  const handleToggleShuffle = () => {
-    const next = !playerState.shuffle
-    toggleShuffle()
-    events?.onShuffleChange?.(next)
+  const handleShuffle = () => {
+    // Send shuffle request to backend (no local toggle)
+    events?.onShuffleChange?.()
   }
 
-  const handleToggleRepeat = () => {
-    const modes: Array<"off" | "all" | "one"> = ["off", "all", "one"]
-    const currentIndex = modes.indexOf(playerState.repeat as any)
-    const nextMode = modes[(currentIndex + 1) % modes.length]
-    toggleRepeat()
-    events?.onRepeatChange?.(nextMode)
+  const handleRepeat = () => {
+    // Send repeat request to backend (no local toggle)
+    events?.onRepeatChange?.()
   }
 
   const handlePlayPause = () => {
@@ -479,11 +464,8 @@ export function AudioPlayer({
               <Button
                 size="icon"
                 variant="ghost"
-                onClick={handleToggleShuffle}
-                className={cn(
-                  "h-8 w-8 transition-colors",
-                  playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-                )}
+                onClick={handleShuffle}
+                className="h-8 w-8"
               >
                 <Shuffle className="h-3.5 w-3.5" />
               </Button>
@@ -515,13 +497,10 @@ export function AudioPlayer({
               <Button
                 size="icon"
                 variant="ghost"
-                onClick={handleToggleRepeat}
-                className={cn(
-                  "h-8 w-8 transition-colors",
-                  playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-                )}
+                onClick={handleRepeat}
+                className="h-8 w-8"
               >
-                {playerState.repeat === "one" ? <Repeat1 className="h-3.5 w-3.5" /> : <Repeat className="h-3.5 w-3.5" />}
+                <Repeat className="h-3.5 w-3.5" />
               </Button>
             )}
           </div>
@@ -555,11 +534,8 @@ export function AudioPlayer({
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={handleToggleShuffle}
-                  className={cn(
-                    "h-9 w-9 transition-colors",
-                    playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-                  )}
+                  onClick={handleShuffle}
+                  className="h-9 w-9"
                 >
                   <Shuffle className="h-4 w-4" />
                 </Button>
@@ -591,13 +567,10 @@ export function AudioPlayer({
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={handleToggleRepeat}
-                  className={cn(
-                    "h-9 w-9 transition-colors",
-                    playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-                  )}
+                  onClick={handleRepeat}
+                  className="h-9 w-9"
                 >
-                  {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                  <Repeat className="h-4 w-4" />
                 </Button>
               )}
             </div>
@@ -745,11 +718,8 @@ export function AudioPlayer({
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={handleToggleShuffle}
-                  className={cn(
-                    "h-9 w-9 transition-colors",
-                    playerState.shuffle && "bg-primary/20 text-primary hover:bg-primary/30",
-                  )}
+                  onClick={handleShuffle}
+                  className="h-9 w-9"
                 >
                   <Shuffle className="h-4 w-4" />
                 </Button>
@@ -793,13 +763,10 @@ export function AudioPlayer({
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={handleToggleRepeat}
-                  className={cn(
-                    "h-9 w-9 transition-colors",
-                    playerState.repeat !== "off" && "bg-primary/20 text-primary hover:bg-primary/30",
-                  )}
+                  onClick={handleRepeat}
+                  className="h-9 w-9"
                 >
-                  {playerState.repeat === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                  <Repeat className="h-4 w-4" />
                 </Button>
               )}
             </div>

@@ -221,6 +221,10 @@ async def start_pending_download(room: Room, queue_item_id: str, client_ip: str,
                     "payload": {"queue": room.queue},
                     "server_time": time.time()
                 })
+                
+                # If no current track and this item is now ready, set it as current track
+                if not room.state.get("track"):
+                    await set_first_available_track(room)
             except asyncio.TimeoutError:
                 # Download timed out - mark as failed
                 for item in room.queue:
@@ -250,25 +254,73 @@ async def start_pending_download(room: Room, queue_item_id: str, client_ip: str,
         if client_ip in active_downloads_per_ip:
             del active_downloads_per_ip[client_ip]
 
+async def set_first_available_track(room: Room):
+    """Helper function to set the first available (non-pending, non-suggested) track in the queue if no current track"""
+    now = time.time()
+    current_track = room.state.get("track")
+    
+    # If there's already a current track, don't change it
+    if current_track:
+        return
+    
+    # Find first available track (not pending, not suggested, and has URL)
+    for item in room.queue:
+        if not item.get("isPending", False) and not item.get("isSuggested", False) and item.get("url"):
+            room.state["track"] = item
+            room.state["duration"] = item.get("duration")
+            room.state["position"] = 0.0
+            room.state["is_playing"] = False
+            room.state["start_time"] = None
+            await room.broadcast({
+                "type": "set_track",
+                "payload": {
+                    "track": room.state["track"],
+                    "is_playing": False,
+                },
+                "server_time": now
+            })
+            break
+
 async def advance_to_next_track(room: Room):
     """Helper function to advance to the next track in the queue for a room"""
     now = time.time()
+    next_track = None
+    
     try:
         # Try to find current track in queue by ID
         current_track = room.state.get("track")
-        if not current_track:
-            return
         
-        current_index = next((i for i, t in enumerate(room.queue) if t.get("id") == current_track.get("id")), -1)
-        if current_index >= 0 and len(room.queue) > 0:
-            next_index = (current_index + 1) % len(room.queue)
-            next_track = room.queue[next_index]
+        # If no current track but queue has items, go to first track
+        if not current_track:
+            if room.queue:
+                # Find first available track (not pending, not suggested, and has URL)
+                for item in room.queue:
+                    if not item.get("isPending", False) and not item.get("isSuggested", False) and item.get("url"):
+                        next_track = item
+                        break
         else:
-            # Current track not in queue, go to first track
-            next_track = room.queue[0] if room.queue else None
+            # Find current track index
+            current_index = next((i for i, t in enumerate(room.queue) if t.get("id") == current_track.get("id")), -1)
+            if current_index >= 0 and len(room.queue) > 0:
+                # Find next available track (skip pending and suggested ones, loop around)
+                for i in range(len(room.queue)):
+                    check_index = (current_index + 1 + i) % len(room.queue)
+                    check_track = room.queue[check_index]
+                    if not check_track.get("isPending", False) and not check_track.get("isSuggested", False) and check_track.get("url"):
+                        next_track = check_track
+                        break
+            else:
+                # Current track not in queue, go to first available track
+                for item in room.queue:
+                    if not item.get("isPending", False) and not item.get("isSuggested", False) and item.get("url"):
+                        next_track = item
+                        break
     except (IndexError, ValueError):
-        # Fallback to first track if queue is empty or error
-        next_track = room.queue[0] if room.queue else None
+        # Fallback to first available track if queue is empty or error
+        for item in room.queue:
+            if not item.get("isPending", False) and not item.get("isSuggested", False) and item.get("url"):
+                next_track = item
+                break
     
     if next_track:
         room.state["track"] = next_track
@@ -278,6 +330,39 @@ async def advance_to_next_track(room: Room):
         room.state["start_time"] = None
         await room.broadcast({
             "type": "next-track",
+            "payload": {"track": room.state["track"]},
+            "server_time": now
+        })
+
+async def advance_to_previous_track(room: Room):
+    """Helper function to go to the previous track in the queue for a room"""
+    now = time.time()
+    try:
+        # Try to find current track in queue by ID
+        current_track = room.state.get("track")
+        if not current_track:
+            return
+        
+        current_index = next((i for i, t in enumerate(room.queue) if t.get("id") == current_track.get("id")), -1)
+        if current_index >= 0 and len(room.queue) > 0:
+            # Go to previous track (wrap around to last track if at first)
+            previous_index = (current_index - 1) % len(room.queue)
+            previous_track = room.queue[previous_index]
+        else:
+            # Current track not in queue, go to last track
+            previous_track = room.queue[-1] if room.queue else None
+    except (IndexError, ValueError):
+        # Fallback to last track if queue is empty or error
+        previous_track = room.queue[-1] if room.queue else None
+    
+    if previous_track:
+        room.state["track"] = previous_track
+        room.state["duration"] = previous_track.get("duration")
+        room.state["position"] = 0.0
+        room.state["is_playing"] = False
+        room.state["start_time"] = None
+        await room.broadcast({
+            "type": "previous-track",
             "payload": {"track": room.state["track"]},
             "server_time": now
         })
@@ -655,6 +740,109 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                 # round robin to the next track
                 await advance_to_next_track(room)
 
+            elif t == "previous-track":
+                # Check permission
+                if not room.is_host_or_mod(ws):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only hosts and moderators can skip tracks"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # round robin to the previous track
+                await advance_to_previous_track(room)
+
+            elif t == "shuffle_queue":
+                # Check permission
+                if not room.is_host_or_mod(ws):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only hosts and moderators can shuffle the queue"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # Shuffle the queue
+                now = time.time()
+                import random
+                if len(room.queue) > 1:
+                    # Shuffle the queue (excluding current track if it exists)
+                    current_track = room.state.get("track")
+                    current_track_id = current_track.get("id") if current_track else None
+                    
+                    # Separate current track from the rest
+                    if current_track_id:
+                        other_tracks = [t for t in room.queue if t.get("id") != current_track_id]
+                        if other_tracks:
+                            random.shuffle(other_tracks)
+                            # Put current track at the beginning, then shuffled rest
+                            room.queue = [t for t in room.queue if t.get("id") == current_track_id] + other_tracks
+                        # If only one track, no need to shuffle
+                    else:
+                        # No current track, just shuffle everything
+                        random.shuffle(room.queue)
+                    
+                    # Broadcast updated queue to all clients
+                    await room.broadcast({
+                        "type": "queue_sync",
+                        "payload": {"queue": room.queue},
+                        "server_time": now
+                    })
+
+            elif t == "repeat_track":
+                # Check permission
+                if not room.is_host_or_mod(ws):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only hosts and moderators can repeat tracks"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # Add current track to queue right after current track
+                now = time.time()
+                current_track = room.state.get("track")
+                
+                if not current_track:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "No track currently playing"},
+                        "server_time": now
+                    })
+                    continue
+                
+                # Find current track position in queue
+                current_index = next((i for i, t in enumerate(room.queue) if t.get("id") == current_track.get("id")), -1)
+                
+                # Create a copy of the current track with a new unique ID
+                unique_id = str(uuid.uuid4())
+                repeated_track = {
+                    "id": unique_id,
+                    "title": current_track.get("title", "Unknown"),
+                    "artist": current_track.get("artist", "Unknown Artist"),
+                    "url": current_track.get("url", ""),
+                    "artwork": current_track.get("artwork"),
+                    "source": current_track.get("source", "html5"),
+                    "duration": current_track.get("duration"),
+                    "isSuggested": False,
+                    "votes": 0,
+                }
+                
+                # Insert right after current track (or at the end if not found)
+                if current_index >= 0:
+                    room.queue.insert(current_index + 1, repeated_track)
+                else:
+                    # Current track not in queue, just append
+                    room.queue.append(repeated_track)
+                
+                # Broadcast updated queue to all clients
+                await room.broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": room.queue},
+                    "server_time": now
+                })
+
             elif t == "ping":
                 await ws.send_json({
                     "type": "pong",
@@ -780,14 +968,46 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                 now = time.time()
                 item_id = data.get("payload", {}).get("item_id")
                 if item_id:
+                    # Check if the deleted item is the current track
+                    current_track = room.state.get("track")
+                    is_current_track = current_track and current_track.get("id") == item_id
+                    
                     # Remove item from queue
                     room.queue[:] = [item for item in room.queue if item.get("id") != item_id]
+                    
                     # Broadcast updated queue to all clients
                     await room.broadcast({
                         "type": "queue_sync",
                         "payload": {"queue": room.queue},
                         "server_time": now
                     })
+                    
+                    # If the deleted item was the current track, handle track change
+                    if is_current_track:
+                        # Check if there are any available tracks left
+                        available_tracks = [item for item in room.queue 
+                                          if not item.get("isPending", False) 
+                                          and not item.get("isSuggested", False) 
+                                          and item.get("url")]
+                        
+                        if available_tracks:
+                            # Advance to next track
+                            await advance_to_next_track(room)
+                        else:
+                            # No tracks left, clear the current track
+                            room.state["track"] = None
+                            room.state["duration"] = None
+                            room.state["position"] = 0.0
+                            room.state["is_playing"] = False
+                            room.state["start_time"] = None
+                            await room.broadcast({
+                                "type": "set_track",
+                                "payload": {
+                                    "track": None,
+                                    "is_playing": False,
+                                },
+                                "server_time": now
+                            })
 
             elif t == "reorder_item":
                 # Check permission
@@ -892,6 +1112,10 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                         "payload": {"queue": room.queue},
                         "server_time": now
                     })
+                    
+                    # If no current track and this item is ready (not pending, has URL), set it as current track
+                    if not queue_item.get("isSuggested", False) and not queue_item.get("isPending", False) and queue_item.get("url"):
+                        await set_first_available_track(room)
 
             elif t == "add_pending_download":
                 # Check permission
@@ -942,6 +1166,8 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                         "payload": {"queue": room.queue},
                         "server_time": now
                     })
+                    
+                    # Note: We don't set track here because it's pending - will be set when download completes
                     
                     # Start download in background
                     asyncio.create_task(start_pending_download(room, queue_item["id"], client_ip, item_data.get("video_id")))

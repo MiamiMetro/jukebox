@@ -241,6 +241,15 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                 const trackData = data.payload.track;
                 const shouldPlay = data.payload.is_playing === true;
 
+                // Handle null track (queue is empty)
+                if (trackData === null || trackData === undefined) {
+                    setTrack(null);
+                    setStoreTrack(null);
+                    controls?.pause();
+                    controls?.seek(0);
+                    return;
+                }
+
                 // Backend now sends full track object
                 if (typeof trackData === "object" && trackData.url) {
                     setTrack({
@@ -352,7 +361,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                 }));
                 console.log("Setting queue items:", queueItems);
                 setStoreQueue(queueItems);
-            } else if (data.type === "next-track") {
+            } else if (data.type === "next-track" || data.type === "previous-track") {
                 const trackData = data.payload.track;
                 const state = controls?.getState();
                 const wasPlaying = state?.isPlaying || false;
@@ -363,7 +372,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                 setTrack(trackData);
                 controls?.seek(0);
                 
-                // Backend sets is_playing to False on next-track, so we need to pause first
+                // Backend sets is_playing to False on track change, so we need to pause first
                 // to sync with backend state, then play if it was playing before
                 controls?.pause();
                 
@@ -497,8 +506,24 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
             <AudioPlayer
                 track={track}
                 mode={mode}
-                onNext={() => console.log("Next track")}
-                onPrevious={() => console.log("Previous track")}
+                onNext={() => {
+                    if (mode === "host" && ws.current && ws.current.readyState === WebSocket.OPEN) {
+                        const data = {
+                            type: "next-track",
+                        };
+                        ws.current.send(JSON.stringify(data));
+                        console.log("sent", data);
+                    }
+                }}
+                onPrevious={() => {
+                    if (mode === "host" && ws.current && ws.current.readyState === WebSocket.OPEN) {
+                        const data = {
+                            type: "previous-track",
+                        };
+                        ws.current.send(JSON.stringify(data));
+                        console.log("sent", data);
+                    }
+                }}
                 onPlayerReady={(playerControls) => setControls(playerControls)}
                 events={{
                     onPlay: () => {
@@ -542,6 +567,24 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                         };
                         ws.current?.send(JSON.stringify(data));
                         console.log("sent", data);
+                    },
+                    onShuffleChange: () => {
+                        if (mode === "host" && ws.current && ws.current.readyState === WebSocket.OPEN) {
+                            const data = {
+                                type: "shuffle_queue",
+                            };
+                            ws.current.send(JSON.stringify(data));
+                            console.log("sent", data);
+                        }
+                    },
+                    onRepeatChange: () => {
+                        if (mode === "host" && ws.current && ws.current.readyState === WebSocket.OPEN) {
+                            const data = {
+                                type: "repeat_track",
+                            };
+                            ws.current.send(JSON.stringify(data));
+                            console.log("sent", data);
+                        }
                     },
                 }}
             />
