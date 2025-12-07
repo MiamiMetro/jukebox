@@ -619,7 +619,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
 }
 
 function MiddleBottom({ currentRoom }: { currentRoom: string }) {
-    const { controls, ws } = useJukeboxStore();
+    const { controls, ws, queue } = useJukeboxStore();
     
     return (
         <div className="h-full overflow-y-auto">
@@ -675,6 +675,24 @@ function MiddleBottom({ currentRoom }: { currentRoom: string }) {
                         console.error("Failed to get users:", error);
                     }
                 }}>Debug: Get Current Room Users</Button>
+
+                <Button onClick={() => {
+                    console.log("Queue songs:", queue);
+                    console.log(`Total queue items: ${queue.length}`);
+                    queue.forEach((item, index) => {
+                        console.log(`Queue item ${index + 1}:`, {
+                            id: item.id,
+                            title: item.title,
+                            artist: item.artist,
+                            url: item.url,
+                            source: item.source,
+                            duration: item.duration,
+                            votes: item.votes,
+                            isSuggested: item.isSuggested,
+                            isPending: item.isPending,
+                        });
+                    });
+                }}>Debug: Get Queue Songs</Button>
             </div>
         </div>
     );

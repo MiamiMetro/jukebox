@@ -157,6 +157,12 @@ class DownloadQueue:
                         file_info = supabase.storage.from_(supabase_bucket).info(supabase_filename)
                         public_url = supabase.storage.from_(supabase_bucket).get_public_url(supabase_filename)
                         
+                        # Use Cloudflare DNS if available
+                        cloudflare_domain = os.getenv("CLOUDFLARE_DOMAIN")
+                        final_url = public_url
+                        if cloudflare_domain:
+                            final_url = f"{cloudflare_domain}/{supabase_bucket}/{supabase_filename}"
+                        
                         # Get video metadata
                         ydl_opts = {
                             'quiet': True,
@@ -176,7 +182,7 @@ class DownloadQueue:
                             "duration": info.get('duration'),
                             "artwork": artwork,
                             "filename": supabase_filename,
-                            "url": public_url,
+                            "url": final_url,
                             "size": file_info.get('size') if isinstance(file_info, dict) else None,
                             "message": "File already exists in storage",
                         }
@@ -226,6 +232,12 @@ class DownloadQueue:
                             raise
                     
                     public_url = supabase.storage.from_(supabase_bucket).get_public_url(supabase_filename)
+                    
+                    # Use Cloudflare DNS if available
+                    cloudflare_domain = os.getenv("CLOUDFLARE_DOMAIN")
+                    final_url = public_url
+                    if cloudflare_domain:
+                        final_url = f"{cloudflare_domain}/{supabase_bucket}/{supabase_filename}"
                 else:
                     raise Exception("Supabase not configured")
                 
@@ -242,7 +254,7 @@ class DownloadQueue:
                     "duration": info.get('duration'),
                     "artwork": artwork,
                     "filename": supabase_filename,
-                    "url": public_url,
+                    "url": final_url,
                     "size": len(file_content),
                 }
         except Exception as e:
@@ -526,6 +538,12 @@ async def download_youtube(download_request: DownloadRequest):
                 file_info = supabase.storage.from_(supabase_bucket).info(supabase_filename)
                 public_url = supabase.storage.from_(supabase_bucket).get_public_url(supabase_filename)
                 
+                # Use Cloudflare DNS if available
+                cloudflare_domain = os.getenv("CLOUDFLARE_DOMAIN")
+                final_url = public_url
+                if cloudflare_domain:
+                    final_url = f"{cloudflare_domain}/{supabase_bucket}/{supabase_filename}"
+                
                 # Get video metadata from YouTube
                 url = f"https://www.youtube.com/watch?v={download_request.video_id}"
                 ydl_opts = {
@@ -543,18 +561,25 @@ async def download_youtube(download_request: DownloadRequest):
                     "title": info.get('title', 'Unknown'),
                     "duration": info.get('duration'),
                     "filename": supabase_filename,
-                    "url": public_url,
+                    "url": final_url,
                     "size": file_info.get('size') if isinstance(file_info, dict) else None,
                     "message": "File already exists in storage",
                 })
             except Exception as e:
                 # If we can't get file info, still return the URL
                 public_url = supabase.storage.from_(supabase_bucket).get_public_url(supabase_filename)
+                
+                # Use Cloudflare DNS if available
+                cloudflare_domain = os.getenv("CLOUDFLARE_DOMAIN")
+                final_url = public_url
+                if cloudflare_domain:
+                    final_url = f"{cloudflare_domain}/{supabase_bucket}/{supabase_filename}"
+                
                 return JSONResponse({
                     "success": True,
                     "video_id": download_request.video_id,
                     "filename": supabase_filename,
-                    "url": public_url,
+                    "url": final_url,
                     "message": "File already exists in storage",
                 })
     except Exception as e:
