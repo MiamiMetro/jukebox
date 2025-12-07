@@ -28,6 +28,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
     // Local state for component-specific needs
     const [track, setTrack] = useState<Track | null>(null);
     const [controls, setControls] = useState<PlayerControls | null>(null);
+    const [isDancing, setIsDancing] = useState(false);
     const ws = useRef<WebSocket | null>(null);
     const isChangingTrackRef = useRef<boolean>(false);
     const isConnectingRef = useRef<boolean>(false);
@@ -387,6 +388,12 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                 }));
                 console.log("Setting queue items:", queueItems);
                 setStoreQueue(queueItems);
+            } else if (data.type === "dance") {
+                // Handle dance command - show GIF for 10 seconds
+                setIsDancing(true);
+                setTimeout(() => {
+                    setIsDancing(false);
+                }, 10000); // 10 seconds
             } else if (data.type === "next-track" || data.type === "previous-track") {
                 const trackData = data.payload.track;
                 const state = controls?.getState();
@@ -532,6 +539,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
             <AudioPlayer
                 track={track}
                 mode={mode}
+                isDancing={isDancing}
                 onNext={() => {
                     if (mode === "host" && ws.current && ws.current.readyState === WebSocket.OPEN) {
                         const data = {
@@ -693,6 +701,18 @@ function MiddleBottom({ currentRoom }: { currentRoom: string }) {
                         });
                     });
                 }}>Debug: Get Queue Songs</Button>
+
+                <Button onClick={() => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) {
+                        console.log("WebSocket not connected");
+                        return;
+                    }
+                    const data = {
+                        type: "dance",
+                    };
+                    ws.send(JSON.stringify(data));
+                    console.log("sent", data);
+                }}>Debug: Send Dance</Button>
             </div>
         </div>
     );

@@ -45,6 +45,7 @@ interface AudioPlayerProps {
   onPrevious?: () => void
   scrollControls?: ScrollControlOptions
   onPlayerReady?: (controls: PlayerControls) => void
+  isDancing?: boolean
 }
 
 export interface PlayerControls {
@@ -73,6 +74,7 @@ export function AudioPlayer({
   onPrevious,
   scrollControls = { enableVolumeControl: true, enableTrackControl: true },
   onPlayerReady,
+  isDancing = false,
 }: AudioPlayerProps) {
   const {
     currentTrack,
@@ -775,17 +777,19 @@ export function AudioPlayer({
             <div className="hidden md:block w-28" />
           </div>
         </div>
-          {/* GIF on the right side of the audio player, aligned with artwork */}
-          {/* <div className="absolute right-10 md:right-8 top-10 md:top-6 flex items-start z-10 pointer-events-none" style={{ willChange: 'transform' }}>
-            <img
-              src="https://media.tenor.com/qiYC04fUus0AAAAj/rainbow-pls-bttv.gif"
-              alt=""
-              className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shrink-0"
-              loading="eager"
-              decoding="async"
-              style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
-            />
-          </div> */}
+          {/* GIF on the right side of the audio player, aligned with artwork - show when playing or dancing */}
+          {(playerState.isPlaying && isDancing) && (
+            <div className="absolute right-10 md:right-8 top-10 md:top-6 flex items-start z-10 pointer-events-none" style={{ willChange: 'transform' }}>
+              <img
+                src="https://media.tenor.com/qiYC04fUus0AAAAj/rainbow-pls-bttv.gif"
+                alt=""
+                className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shrink-0"
+                loading="eager"
+                decoding="async"
+                style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
+              />
+            </div>
+          )}
       </Card>
       {/* Container for audio adapters (rendered once, outside variant conditionals) */}
       {/* The adapter will create/manage the iframe inside this container */}

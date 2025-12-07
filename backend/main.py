@@ -989,6 +989,15 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     "server_time": now
                 })
 
+            elif t == "dance":
+                # Broadcast dance command to all users in this room
+                now = time.time()
+                await room.broadcast({
+                    "type": "dance",
+                    "payload": {},
+                    "server_time": now
+                })
+
             elif t == "delete_item":
                 # Check permission
                 if not room.is_host_or_mod(ws):
