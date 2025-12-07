@@ -324,6 +324,84 @@ def ensure_workers_started():
 active_downloads_per_ip: Dict[str, str] = {}  # IP -> task_id
 
 
+def get_estimated_audio_size(video_id: str, max_size_mb: float = 10.0):
+    """
+    Get estimated audio file size before downloading.
+    First tries to get actual format file sizes, falls back to duration-based estimation.
+    Strict: Returns None if size cannot be determined (will block download).
+    
+    Args:
+        video_id: YouTube video ID
+        max_size_mb: Maximum allowed size in MB (default 10MB)
+    
+    Returns:
+        Tuple of (estimated_size_bytes, is_over_limit, duration)
+        Returns (None, True, None) if size cannot be determined (to block download)
+    """
+    print(f"[SIZE CHECK] Starting size check for video: {video_id} (max: {max_size_mb} MB)")
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        duration = None
+        best_size = None
+        
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'socket_timeout': 10,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            duration = info.get('duration')
+            
+            # Try to get actual format file sizes for audio-only formats
+            formats = info.get('formats', [])
+            audio_formats = [
+                fmt for fmt in formats 
+                if fmt.get('acodec') != 'none' and (fmt.get('vcodec') == 'none' or fmt.get('vcodec') is None)
+            ]
+            
+            if audio_formats:
+                # Find best audio format (similar to what download will use)
+                best_audio = max(audio_formats, key=lambda f: f.get('abr', 0) or 0)
+                # Try filesize first, then filesize_approx
+                best_size = best_audio.get('filesize') or best_audio.get('filesize_approx')
+        
+        if not duration:
+            # Can't estimate without duration - block download (fail-closed)
+            print(f"[SIZE CHECK] Video {video_id}: Could not get duration, blocking download")
+            return None, True, None
+        
+        # Use actual format size if available, otherwise estimate
+        if best_size:
+            # Use actual format size (more accurate)
+            estimated_bytes = best_size
+            estimated_mb = estimated_bytes / (1024 * 1024)
+            # Add 20% buffer for MP3 conversion overhead
+            estimated_bytes_with_buffer = int(estimated_bytes * 1.2)
+            estimated_mb_with_buffer = estimated_bytes_with_buffer / (1024 * 1024)
+        else:
+            # Estimate based on duration and 192 kbps MP3 encoding
+            # (same as configured in download: preferredquality: '192')
+            # Formula: Size (MB) = (duration_seconds * bitrate_kbps) / (8 * 1024)
+            audio_bitrate_kbps = 192  # Same as download configuration
+            estimated_bytes = (duration * audio_bitrate_kbps * 1024) / 8
+            estimated_mb = estimated_bytes / (1024 * 1024)
+            # Add 30% buffer for safety (to account for variable bitrate, headers, etc.)
+            estimated_bytes_with_buffer = int(estimated_bytes * 1.3)
+            estimated_mb_with_buffer = estimated_bytes_with_buffer / (1024 * 1024)
+        
+        is_over = estimated_mb_with_buffer > max_size_mb
+        print(f"[SIZE CHECK] Video {video_id}: estimated {estimated_mb_with_buffer:.2f} MB (duration: {duration}s), over limit: {is_over}")
+        return int(estimated_bytes_with_buffer), is_over, duration
+            
+    except Exception as e:
+        # If we can't determine size, block the download (fail-closed)
+        print(f"[SIZE CHECK] Video {video_id}: Error during size check: {e}, blocking download")
+        return None, True, None
+
+
 class SearchResult(BaseModel):
     id: str
     title: str
@@ -419,6 +497,50 @@ async def search_youtube(
         raise HTTPException(
             status_code=500,
             detail=f"Search failed: {str(e)}"
+        )
+
+
+@router.get("/size-check/{video_id}")
+async def check_video_size(video_id: str):
+    """
+    Get estimated audio file size and duration for a YouTube video.
+    Also reports how long it took to get this information.
+    
+    Args:
+        video_id: YouTube video ID
+    
+    Returns:
+        JSON with duration, estimated_size_mb, estimated_size_bytes, and timing info
+    """
+    start_time = time.time()
+    
+    try:
+        estimated_size, is_over_limit, duration = get_estimated_audio_size(
+            video_id,
+            max_size_mb=10.0
+        )
+        
+        elapsed_seconds = time.time() - start_time
+        
+        size_mb = estimated_size / (1024 * 1024) if estimated_size else None
+        
+        print(f"[SIZE CHECK API] Video {video_id} - Duration: {duration}s, Size: {size_mb:.2f} MB (took {elapsed_seconds:.3f} seconds)")
+        
+        return {
+            "video_id": video_id,
+            "duration_seconds": duration,
+            "estimated_size_bytes": estimated_size,
+            "estimated_size_mb": round(size_mb, 2) if size_mb else None,
+            "is_over_10mb_limit": is_over_limit if estimated_size else None,
+            "check_duration_seconds": round(elapsed_seconds, 3),
+            "success": True
+        }
+    except Exception as e:
+        elapsed_seconds = time.time() - start_time
+        print(f"[SIZE CHECK API] Video {video_id} - Error: {str(e)} (took {elapsed_seconds:.3f} seconds)")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check video size: {str(e)} (took {elapsed_seconds:.3f} seconds)"
         )
 
 
@@ -585,6 +707,37 @@ async def download_youtube(download_request: DownloadRequest):
     except Exception as e:
         # If exists check fails, continue with download
         pass
+    
+    # Check file size before downloading (10MB limit) - MUST pass before download
+    print(f"[SIZE CHECK] Download API: Checking size for video {download_request.video_id}")
+    estimated_size, is_over_limit, duration = get_estimated_audio_size(
+        download_request.video_id,
+        max_size_mb=10.0
+    )
+    
+    # Block if over limit OR if we can't determine size (fail-closed)
+    if is_over_limit:
+        if estimated_size:
+            size_mb = estimated_size / (1024 * 1024)
+            duration_min = duration / 60 if duration else 0
+            raise HTTPException(
+                status_code=400,
+                detail=f"Audio file is too large (estimated {size_mb:.2f} MB for {duration_min:.1f} min). Maximum allowed size is 10 MB."
+            )
+        else:
+            # Size couldn't be determined but we're blocking anyway
+            raise HTTPException(
+                status_code=400,
+                detail="Could not determine file size. Download blocked for safety. Maximum allowed size is 10 MB."
+            )
+    
+    # Also block if we can't determine the size (double-check fail-closed)
+    if estimated_size is None:
+        print(f"Warning: Could not estimate file size for {download_request.video_id}, blocking download for safety")
+        raise HTTPException(
+            status_code=400,
+            detail="Could not determine file size. Download blocked for safety. Maximum allowed size is 10 MB."
+        )
     
     # Ensure workers are started
     ensure_workers_started()

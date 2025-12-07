@@ -217,9 +217,119 @@ client_ips: Dict[WebSocket, str] = {}
 
 async def start_pending_download(room: Room, queue_item_id: str, client_ip: str, video_id: str):
     """Start download for a pending queue item in a room"""
-    from yt_api import download_queue, active_downloads_per_ip
+    from yt_api import download_queue, active_downloads_per_ip, get_estimated_audio_size, supabase, supabase_bucket
     
     try:
+        # First check if file already exists in database (skip size check if it does)
+        supabase_filename = f"yt-{video_id}.mp3"
+        file_exists = False
+        
+        if supabase:
+            try:
+                file_exists = supabase.storage.from_(supabase_bucket).exists(supabase_filename)
+                if file_exists:
+                    print(f"[SIZE CHECK] Queue download: File {video_id} already exists in database, skipping size check")
+                    # File exists - get URL and update queue item
+                    try:
+                        file_info = supabase.storage.from_(supabase_bucket).info(supabase_filename)
+                        public_url = supabase.storage.from_(supabase_bucket).get_public_url(supabase_filename)
+                        
+                        # Use Cloudflare DNS if available
+                        import os
+                        cloudflare_domain = os.getenv("CLOUDFLARE_DOMAIN")
+                        final_url = public_url
+                        if cloudflare_domain:
+                            final_url = f"{cloudflare_domain}/{supabase_bucket}/{supabase_filename}"
+                        
+                        # Get video metadata from YouTube
+                        import yt_dlp
+                        url = f"https://www.youtube.com/watch?v={video_id}"
+                        ydl_opts = {
+                            'quiet': True,
+                            'no_warnings': True,
+                            'skip_download': True,
+                        }
+                        
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                        
+                        # Update queue item with existing file
+                        for item in room.queue:
+                            if item.get("id") == queue_item_id:
+                                item["url"] = final_url
+                                if info.get("thumbnail"):
+                                    item["artwork"] = info.get("thumbnail")
+                                if info.get("duration"):
+                                    item["duration"] = max(1, info.get("duration") - 1.25)
+                                item["isPending"] = False
+                                if "video_id" in item:
+                                    del item["video_id"]
+                                break
+                        
+                        # Broadcast updated queue
+                        await room.broadcast({
+                            "type": "queue_sync",
+                            "payload": {"queue": room.queue},
+                            "server_time": time.time()
+                        })
+                        
+                        # Remove IP from active downloads
+                        if client_ip in active_downloads_per_ip:
+                            del active_downloads_per_ip[client_ip]
+                        
+                        return  # File exists, no download needed
+                    except Exception as e:
+                        print(f"Error getting file info for existing file {video_id}: {e}")
+                        # Continue with download if we can't get file info
+            except Exception as e:
+                print(f"Error checking if file exists for {video_id}: {e}")
+                # Continue with download if check fails
+        
+        # File doesn't exist - check size before downloading (10MB limit)
+        print(f"[SIZE CHECK] Queue download: File {video_id} not in database, checking size (queue item: {queue_item_id})")
+        estimated_size, is_over_limit, duration = get_estimated_audio_size(
+            video_id,
+            max_size_mb=10.0
+        )
+        
+        # Block if over limit OR if we can't determine size (fail-closed)
+        if is_over_limit:
+            # Remove item from queue since it failed size check
+            room.queue[:] = [item for item in room.queue if item.get("id") != queue_item_id]
+            
+            # Broadcast updated queue
+            await room.broadcast({
+                "type": "queue_sync",
+                "payload": {"queue": room.queue},
+                "server_time": time.time()
+            })
+            
+            # Remove IP from active downloads
+            if client_ip in active_downloads_per_ip:
+                del active_downloads_per_ip[client_ip]
+            
+            print(f"Download blocked for {video_id}: File too large (estimated {estimated_size / (1024 * 1024):.2f} MB). Removed from queue." if estimated_size else f"Download blocked for {video_id}: Could not determine file size. Removed from queue.")
+            return
+        
+        # Also block if we can't determine the size (double-check fail-closed)
+        if estimated_size is None:
+            # Remove item from queue since we can't determine size
+            room.queue[:] = [item for item in room.queue if item.get("id") != queue_item_id]
+            
+            # Broadcast updated queue
+            await room.broadcast({
+                "type": "queue_sync",
+                "payload": {"queue": room.queue},
+                "server_time": time.time()
+            })
+            
+            # Remove IP from active downloads
+            if client_ip in active_downloads_per_ip:
+                del active_downloads_per_ip[client_ip]
+            
+            print(f"Download blocked for {video_id}: Could not determine file size. Removed from queue.")
+            return
+        
         # Mark IP as downloading
         active_downloads_per_ip[client_ip] = queue_item_id
         
@@ -1201,7 +1311,7 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                         "video_id": item_data.get("video_id"),  # Store video ID for download
                     }
                     
-                    # Add to queue
+                    # Add to queue first (before size check)
                     room.queue.append(queue_item)
                     
                     # Broadcast updated queue to all clients
@@ -1213,7 +1323,7 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     
                     # Note: We don't set track here because it's pending - will be set when download completes
                     
-                    # Start download in background
+                    # Start download in background (size check happens inside start_pending_download)
                     asyncio.create_task(start_pending_download(room, queue_item["id"], client_ip, item_data.get("video_id")))
 
             elif t == "check_room_exists":
