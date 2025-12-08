@@ -250,7 +250,7 @@ async def start_pending_download(room: Room, queue_item_id: str, client_ip: str,
                             'skip_download': True,
                         }
                         
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore
                             info = ydl.extract_info(url, download=False)
                         
                         # Update queue item with existing file
@@ -260,7 +260,9 @@ async def start_pending_download(room: Room, queue_item_id: str, client_ip: str,
                                 if info.get("thumbnail"):
                                     item["artwork"] = info.get("thumbnail")
                                 if info.get("duration"):
-                                    item["duration"] = max(1, info.get("duration") - 1.25)
+                                    duration = info.get("duration")
+                                    if duration and isinstance(duration, (int, float)):
+                                        item["duration"] = max(1, duration - 1.25)
                                 item["isPending"] = False
                                 if "video_id" in item:
                                     del item["video_id"]
@@ -782,7 +784,7 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     continue
                 
                 now = time.time()
-                if room.state["is_playing"]:
+                if room.state["is_playing"] and room.state["start_time"] is not None:
                     room.state["position"] = now - room.state["start_time"]
                     room.state["is_playing"] = False
                 await room.broadcast({
@@ -1082,8 +1084,9 @@ async def ws_endpoint(ws: WebSocket, slug: str):
             elif t == "get_state":
                 # Send current state to requesting client
                 now = time.time()
-                if room.state.get("is_playing") and room.state.get("start_time") is not None:
-                    room.state["position"] = now - room.state["start_time"]
+                start_time = room.state.get("start_time")
+                if room.state.get("is_playing") and start_time is not None:
+                    room.state["position"] = now - start_time
                 await ws.send_json({
                     "type": "state_sync",
                     "payload": room.state,

@@ -54,7 +54,8 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
         const timeoutId = setTimeout(async () => {
             setCheckingRoom(true);
             try {
-                const response = await fetch(`http://192.168.1.2:8000/api/rooms?search=${encodeURIComponent(query)}&limit=1`);
+                const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+                const response = await fetch(`${apiBase}/api/rooms?search=${encodeURIComponent(query)}&limit=1`);
                 if (response.ok) {
                     const data = await response.json();
                     // Check if any room matches exactly
@@ -96,7 +97,8 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
                 params.append("search", search.trim());
             }
             
-            const response = await fetch(`http://192.168.1.2:8000/api/rooms?${params.toString()}`);
+            const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+            const response = await fetch(`${apiBase}/api/rooms?${params.toString()}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
@@ -138,7 +140,8 @@ export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProp
         if (currentRoom && currentRoom.trim() !== "") {
             const fetchCurrentRoomInfo = async () => {
                 try {
-                    const response = await fetch(`http://192.168.1.2:8000/api/rooms?search=${encodeURIComponent(currentRoom)}&limit=1`);
+                    const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+                    const response = await fetch(`${apiBase}/api/rooms?search=${encodeURIComponent(currentRoom)}&limit=1`);
                     if (response.ok) {
                         const data = await response.json();
                         const roomInfo = data.rooms.find((r: Room) => r.slug === currentRoom);

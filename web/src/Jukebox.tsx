@@ -163,7 +163,8 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
         
         console.log("Creating new WebSocket connection to room:", roomSlug);
         isConnectingRef.current = true;
-        ws.current = new WebSocket(`ws://192.168.1.2:8000/ws/${roomSlug}`);
+        const wsUrl = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/^http/, "ws");
+        ws.current = new WebSocket(`${wsUrl}/ws/${roomSlug}`);
         ws.current.onmessage = (event) => {
             const data = JSON.parse(event.data);
             console.log("received", data);
@@ -668,7 +669,8 @@ function MiddleBottom({ currentRoom }: { currentRoom: string }) {
                     }
                     
                     try {
-                        const response = await fetch(`http://192.168.1.2:8000/api/rooms/${encodeURIComponent(currentRoom)}/users`);
+                        const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+                        const response = await fetch(`${apiBase}/api/rooms/${encodeURIComponent(currentRoom)}/users`);
                         if (response.ok) {
                             const data = await response.json();
                             console.log(`Current room (${currentRoom}) users:`, data.users);

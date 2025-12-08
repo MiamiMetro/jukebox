@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Input } from "./components/ui/input";
 import { Button } from "./components/ui/button";
 
-const API_BASE = "http://192.168.1.2:8000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 // API functions
 const searchYouTubeAPI = async (query: string) => {
