@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { Track } from "@/types/audio-player";
 import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play, Plus, Vote, Youtube, FileAudio } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useJukeboxStore } from "../store/jukebox-store";
 
 // Extended track type for queue items with voting
 export interface QueueItem extends Track {
@@ -79,7 +80,7 @@ const getDownloadUrlAPI = async (videoId: string) => {
 export function QueueSearch({ 
     mode, 
     isDrawer = false, 
-    onClose,
+    onClose, 
     currentTrackId,
     queueItems: externalQueueItems,
     ws,
@@ -89,6 +90,7 @@ export function QueueSearch({
     onAddToQueue,
     onSuggest,
 }: QueueSearchProps) {
+    const { roomSettings } = useJukeboxStore();
     const [activeTab, setActiveTab] = useState<"queue" | "search">("queue");
     const [isEditMode, setIsEditMode] = useState(false);
     const [currentTime, setCurrentTime] = useState(Date.now() / 1000); // Current time in seconds
@@ -452,15 +454,21 @@ export function QueueSearch({
                                             <div className="text-sm text-muted-foreground">
                                                 {formatDuration(item.duration)}
                                             </div>
-                                            {/* Voting progress bar (non-invasive, only for suggested items) */}
+                                            {/* Voting progress bar (non-invasive, only for suggested items with duration) */}
                                             {item.isSuggested && item.voting_end_time && (
                                                 <div className="mt-1 h-0.5 bg-muted rounded-full overflow-hidden">
                                                     <div
                                                         className="h-full bg-primary transition-all duration-300"
                                                         style={{
-                                                            width: `${Math.max(0, Math.min(100, ((item.voting_end_time - currentTime) / 10) * 100))}%`
+                                                            width: `${Math.max(0, Math.min(100, ((item.voting_end_time - currentTime) / (roomSettings?.voting_duration || 10)) * 100))}%`
                                                         }}
                                                     />
+                                                </div>
+                                            )}
+                                            {/* Show indicator for infinite duration items */}
+                                            {item.isSuggested && !item.voting_end_time && (
+                                                <div className="mt-1 text-xs text-muted-foreground italic">
+                                                    Manual approval required
                                                 </div>
                                             )}
                                         </div>
@@ -471,13 +479,13 @@ export function QueueSearch({
                                     <div className="flex flex-col items-center gap-1">
                                         <button
                                             onClick={() => handleVote(item.id, "up")}
-                                            disabled={!item.voting_end_time || currentTime >= item.voting_end_time}
+                                            disabled={item.voting_end_time ? currentTime >= item.voting_end_time : false}
                                             className={cn(
                                                 "p-1 rounded hover:bg-muted transition-colors",
                                                 item.userVote === "up" && "bg-primary/20",
-                                                (!item.voting_end_time || currentTime >= item.voting_end_time) && "opacity-50 cursor-not-allowed"
+                                                (item.voting_end_time && currentTime >= item.voting_end_time) && "opacity-50 cursor-not-allowed"
                                             )}
-                                            title={(!item.voting_end_time || currentTime >= item.voting_end_time) ? "Voting has ended" : "Vote up"}
+                                            title={(item.voting_end_time && currentTime >= item.voting_end_time) ? "Voting has ended" : "Vote up"}
                                         >
                                             <ChevronUp className="h-4 w-4" />
                                         </button>
@@ -486,13 +494,13 @@ export function QueueSearch({
                                         </span>
                                         <button
                                             onClick={() => handleVote(item.id, "down")}
-                                            disabled={!item.voting_end_time || currentTime >= item.voting_end_time}
+                                            disabled={item.voting_end_time ? currentTime >= item.voting_end_time : false}
                                             className={cn(
                                                 "p-1 rounded hover:bg-muted transition-colors",
                                                 item.userVote === "down" && "bg-primary/20",
-                                                (!item.voting_end_time || currentTime >= item.voting_end_time) && "opacity-50 cursor-not-allowed"
+                                                (item.voting_end_time && currentTime >= item.voting_end_time) && "opacity-50 cursor-not-allowed"
                                             )}
-                                            title={(!item.voting_end_time || currentTime >= item.voting_end_time) ? "Voting has ended" : "Vote down"}
+                                            title={(item.voting_end_time && currentTime >= item.voting_end_time) ? "Voting has ended" : "Vote down"}
                                         >
                                             <ChevronDown className="h-4 w-4" />
                                         </button>
@@ -575,6 +583,7 @@ function SearchTab({
     onAddToQueue?: (item: QueueItem) => Promise<void> | void;
     onSuggest?: (item: QueueItem) => Promise<void> | void;
 }) {
+    const { roomSettings } = useJukeboxStore();
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
     const [isHTML5Mode, setIsHTML5Mode] = useState(false);
     const [html5Url, setHtml5Url] = useState("");
@@ -1067,10 +1076,18 @@ function SearchTab({
                         )}
                         <Button
                             onClick={handleSuggestHTML5Direct}
-                            disabled={!html5Url.trim() || !isUrlValid}
+                            disabled={
+                                !html5Url.trim() || 
+                                !isUrlValid || 
+                                (roomSettings && !roomSettings.voting_enabled && mode === "listener")
+                            }
                             variant="outline"
                             className="w-full"
-                            title="Suggest for voting"
+                            title={
+                                roomSettings && !roomSettings.voting_enabled && mode === "listener"
+                                    ? "Voting is disabled"
+                                    : "Suggest for voting"
+                            }
                         >
                             <Vote className="h-4 w-4 mr-2" />
                             Open for Vote
@@ -1192,7 +1209,12 @@ function SearchTab({
                                                 variant="outline"
                                                 className="h-8 w-8"
                                                 onClick={() => setOpenMenuId(openMenuId === `vote-${result.id}` ? null : `vote-${result.id}`)}
-                                                title="Suggest for voting"
+                                                disabled={roomSettings && !roomSettings.voting_enabled && mode === "listener"}
+                                                title={
+                                                    roomSettings && !roomSettings.voting_enabled && mode === "listener"
+                                                        ? "Voting is disabled"
+                                                        : "Suggest for voting"
+                                                }
                                             >
                                                 <Vote className="h-4 w-4" />
                                             </Button>

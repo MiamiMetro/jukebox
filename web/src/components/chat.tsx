@@ -19,18 +19,20 @@ const MAX_MESSAGES = 50; // Keep only last 50 messages in frontend
 const MAX_MESSAGE_LENGTH = 400; // Max characters per message
 
 export function Chat({ currentRoom }: { currentRoom: string }) {
-    const { ws, currentUser, roomUsers } = useJukeboxStore();
+    const { ws, currentUser, roomUsers, roomSettings, queue } = useJukeboxStore();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [inputMessage, setInputMessage] = useState("");
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
     const prevUsersRef = useRef<Map<string, { name: string; role: string }>>(new Map());
+    const prevQueueIdsRef = useRef<Set<string>>(new Set());
     const isAtBottomRef = useRef<boolean>(true);
 
     // Clear messages when room changes
     useEffect(() => {
         setMessages([]);
         prevUsersRef.current.clear();
+        prevQueueIdsRef.current.clear();
         isAtBottomRef.current = true; // Reset to bottom when room changes
     }, [currentRoom]);
 
@@ -96,6 +98,48 @@ export function Chat({ currentRoom }: { currentRoom: string }) {
         // Update previous users
         prevUsersRef.current = currentUsersMap;
     }, [roomUsers, currentRoom]);
+
+    // Track queue changes for system messages
+    useEffect(() => {
+        if (!currentRoom || queue.length === 0) {
+            // If queue is empty, clear previous queue IDs
+            if (queue.length === 0) {
+                prevQueueIdsRef.current.clear();
+            }
+            return;
+        }
+
+        const currentQueueIds = new Set(queue.map(item => item.id));
+        
+        // Find new items added to queue (not in previous queue)
+        queue.forEach((item) => {
+            if (!prevQueueIdsRef.current.has(item.id) && prevQueueIdsRef.current.size > 0) {
+                // Item added (not the first load) - anonymous message
+                // Different message for suggested items vs directly added items
+                const message = item.isSuggested 
+                    ? `"${item.title}" by ${item.artist} was suggested for voting`
+                    : `"${item.title}" by ${item.artist} was added to the queue`;
+                
+                const systemMessage: ChatMessage = {
+                    id: `system-queue-add-${Date.now()}-${Math.random()}`,
+                    name: "System",
+                    message: message,
+                    timestamp: Date.now() / 1000,
+                    role: "listener",
+                    is_deleted: false,
+                    is_system: true,
+                };
+                setMessages((prev) => {
+                    const updated = [...prev, systemMessage];
+                    // Keep only last 50 messages
+                    return updated.slice(-MAX_MESSAGES);
+                });
+            }
+        });
+
+        // Update previous queue IDs
+        prevQueueIdsRef.current = currentQueueIds;
+    }, [queue, currentRoom]);
 
     // Check if user is at bottom of chat
     const checkIfAtBottom = () => {
@@ -188,6 +232,10 @@ export function Chat({ currentRoom }: { currentRoom: string }) {
                             msg.id === messageId ? { ...msg, is_deleted: true } : msg
                         )
                     );
+                } else if (data.type === "chat_cleared") {
+                    // Clear all messages
+                    setMessages([]);
+                    isAtBottomRef.current = true;
                 }
             } catch (e) {
                 // Not a chat message, ignore
@@ -327,33 +375,50 @@ export function Chat({ currentRoom }: { currentRoom: string }) {
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Input area */}
-            <div className="flex gap-2 shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
-                <Input
-                    value={inputMessage}
-                    onChange={(e) => {
-                        const value = e.target.value.slice(0, MAX_MESSAGE_LENGTH);
-                        setInputMessage(value);
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSend();
-                        }
-                    }}
-                    placeholder={`Type a message...`}
-                    disabled={!currentRoom || currentRoom.trim() === "" || !ws || ws.readyState !== WebSocket.OPEN}
-                    className="flex-1"
-                    maxLength={MAX_MESSAGE_LENGTH}
-                />
-                <Button
-                    onClick={handleSend}
-                    disabled={!inputMessage.trim() || !currentRoom || currentRoom.trim() === "" || !ws || ws.readyState !== WebSocket.OPEN}
-                    size="icon"
-                >
-                    <Send className="h-4 w-4" />
-                </Button>
-            </div>
+                    {/* Input area */}
+                    <div className="flex gap-2 shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
+                        <Input
+                            value={inputMessage}
+                            onChange={(e) => {
+                                const value = e.target.value.slice(0, MAX_MESSAGE_LENGTH);
+                                setInputMessage(value);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    handleSend();
+                                }
+                            }}
+                            placeholder={
+                                roomSettings && !roomSettings.chat_enabled && currentUser?.role !== "host" && currentUser?.role !== "moderator"
+                                    ? "Chat is disabled"
+                                    : "Type a message..."
+                            }
+                            disabled={
+                                !currentRoom || 
+                                currentRoom.trim() === "" || 
+                                !ws || 
+                                ws.readyState !== WebSocket.OPEN ||
+                                (roomSettings?.chat_enabled === false && currentUser?.role !== "host" && currentUser?.role !== "moderator")
+                            }
+                            className="flex-1"
+                            maxLength={MAX_MESSAGE_LENGTH}
+                        />
+                        <Button
+                            onClick={handleSend}
+                            disabled={
+                                !inputMessage.trim() || 
+                                !currentRoom || 
+                                currentRoom.trim() === "" || 
+                                !ws || 
+                                ws.readyState !== WebSocket.OPEN ||
+                                (roomSettings?.chat_enabled === false && currentUser?.role !== "host" && currentUser?.role !== "moderator")
+                            }
+                            size="icon"
+                        >
+                            <Send className="h-4 w-4" />
+                        </Button>
+                    </div>
         </div>
     );
 }

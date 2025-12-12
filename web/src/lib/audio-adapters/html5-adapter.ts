@@ -55,8 +55,22 @@ export class HTML5AudioAdapter implements AudioPlayerAdapter {
   async play(): Promise<void> {
     // Check if audio has a source and is ready before playing
     if (this.audio.src && this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      // Let errors propagate so caller can handle retry logic (important for Safari autoplay)
-      await this.audio.play()
+      try {
+        // Let errors propagate so caller can handle retry logic (important for Safari autoplay)
+        await this.audio.play()
+      } catch (error: any) {
+        // Ignore AbortError - this happens when play() is interrupted by pause()
+        // This is expected behavior and not an actual error
+        if (error?.name === "AbortError" || error?.name === "NotAllowedError") {
+          // NotAllowedError can also occur when autoplay is blocked, but we'll let it propagate
+          // Only AbortError should be silently ignored
+          if (error?.name === "AbortError") {
+            return // Silently ignore AbortError
+          }
+        }
+        // Re-throw other errors so caller can handle retry logic
+        throw error
+      }
     } else {
       // If not ready, throw an error so caller knows to retry
       throw new Error("Audio not ready to play")

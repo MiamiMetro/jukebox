@@ -71,6 +71,20 @@ interface JukeboxStore {
     setUsersTotal: (total: number) => void;
     lastReceivedUsersPage: number | null;
     setLastReceivedUsersPage: (page: number | null) => void;
+    
+    // Room settings
+    roomSettings: {
+        chat_enabled: boolean;
+        voting_enabled: boolean;
+        voting_duration: number;
+        voting_duration_enabled: boolean;
+    } | null;
+    setRoomSettings: (settings: {
+        chat_enabled: boolean;
+        voting_enabled: boolean;
+        voting_duration: number;
+        voting_duration_enabled: boolean;
+    } | null) => void;
 }
 
 export const useJukeboxStore = create<JukeboxStore>((set) => ({
@@ -111,5 +125,8 @@ export const useJukeboxStore = create<JukeboxStore>((set) => ({
     setUsersTotal: (total) => set({ usersTotal: total }),
     lastReceivedUsersPage: null,
     setLastReceivedUsersPage: (page) => set({ lastReceivedUsersPage: page }),
+    
+    roomSettings: null,
+    setRoomSettings: (settings) => set({ roomSettings: settings }),
 }));
 

@@ -168,7 +168,11 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (playerState.isPlaying && hasUserInteractedRef.current) {
         try {
           await adapter.play()
-        } catch (error) {
+        } catch (error: any) {
+          // Ignore AbortError - this happens when play() is interrupted by pause()
+          if (error?.name === "AbortError") {
+            return // Silently ignore AbortError
+          }
           // Autoplay failed (e.g., on mobile without user interaction)
           // Silently handle - user will need to press play
           console.debug("Autoplay failed:", error)
@@ -187,12 +191,22 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (adapterRef.current) {
       // Mark that user has interacted (enables autoplay for future track changes on mobile)
       hasUserInteractedRef.current = true
-      await adapterRef.current.play()
-      if (mode === "listener") {
-        setPlayerState((prev) => ({ ...prev, isLive: true }))
+      try {
+        await adapterRef.current.play()
+        if (mode === "listener") {
+          setPlayerState((prev) => ({ ...prev, isLive: true }))
+        }
+        // Update Media Session
+        updateMediaSession(currentTrack, true)
+      } catch (error: any) {
+        // Ignore AbortError - this happens when play() is interrupted by pause()
+        // This is expected behavior and not an actual error
+        if (error?.name === "AbortError") {
+          return // Silently ignore AbortError
+        }
+        // Re-throw other errors (like NotAllowedError for autoplay blocking)
+        throw error
       }
-      // Update Media Session
-      updateMediaSession(currentTrack, true)
     }
   }, [mode, currentTrack, updateMediaSession])
 

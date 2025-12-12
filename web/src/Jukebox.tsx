@@ -10,6 +10,7 @@ import { useJukeboxStore } from "./store/jukebox-store";
 import { cn } from "./lib/utils";
 import { NameSetting } from "./components/name-setting";
 import { Chat } from "./components/chat";
+import { RoomSettings } from "./components/room-settings";
 
 function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: string; onRoomChange: (room: string) => void }) {
     // Use Zustand store for shared state
@@ -25,6 +26,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
         setCurrentUser: setStoreCurrentUser,
         setUsersTotal: setStoreUsersTotal,
         setLastReceivedUsersPage: setStoreLastReceivedUsersPage,
+        setRoomSettings: setStoreRoomSettings,
     } = useJukeboxStore();
     
     // Local state for component-specific needs
@@ -389,10 +391,14 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                     userVote: null, // Will be tracked locally in queue-search component
                     isPending: item.isPending || false,
                     video_id: item.video_id,
-                    voting_end_time: item.voting_end_time, // Include voting end time
+                    voting_end_time: item.voting_end_time, // Include voting end time (null if infinite)
                 }));
                 console.log("Setting queue items:", queueItems);
                 setStoreQueue(queueItems);
+            } else if (data.type === "room_settings") {
+                // Handle room settings update
+                setStoreRoomSettings(data.payload);
+                console.log("Received room_settings:", data.payload);
             } else if (data.type === "dance") {
                 // Handle dance command - show GIF for 10 seconds
                 setIsDancing(true);
@@ -449,7 +455,12 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                                         };
                                         ws.current?.send(JSON.stringify(syncData));
                                     }, 300);
-                                }).catch((error: unknown) => {
+                                }).catch((error: any) => {
+                                    // Ignore AbortError - this happens when play() is interrupted by pause()
+                                    if (error?.name === "AbortError") {
+                                        isChangingTrackRef.current = false;
+                                        return;
+                                    }
                                     // Play failed, retry if we haven't exceeded max attempts
                                     console.debug("Play attempt failed, retrying...", error);
                                     if (attempts < maxAttempts) {
@@ -827,6 +838,13 @@ function RightSidebarContent({
                     onRoomChange={handleRoomChange}
                 />
                 
+                {/* Room Settings - Only for hosts/moderators */}
+                {currentRoom && currentRoom.trim() !== "" && (
+                    <div className="mt-4 border-t pt-4">
+                        <RoomSettings />
+                    </div>
+                )}
+
                 {/* Users List */}
                 {currentRoom && currentRoom.trim() !== "" && (
                     <div className="mt-4 flex flex-col flex-1 min-h-0">

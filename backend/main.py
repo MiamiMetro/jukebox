@@ -49,6 +49,12 @@ class Room:
     host: Optional[WebSocket] = None
     created_at: float = field(default_factory=time.time)
     chat_messages: list = field(default_factory=list)  # Max 10 messages
+    settings: dict = field(default_factory=lambda: {
+        "chat_enabled": True,  # Chat enabled for all users
+        "voting_enabled": True,  # Listeners can suggest items
+        "voting_duration": 10.0,  # Default 10 seconds
+        "voting_duration_enabled": True,  # If False, infinite duration (no auto-approve)
+    })
     
     def get_user(self, ws: WebSocket) -> Optional[User]:
         """Get user by websocket"""
@@ -552,8 +558,9 @@ async def advance_to_next_track(room: Room):
         room.state["track"] = next_track
         room.state["duration"] = next_track.get("duration")
         room.state["position"] = 0.0
-        room.state["is_playing"] = False
-        room.state["start_time"] = None
+        # Auto-play the next track when advancing
+        room.state["is_playing"] = True
+        room.state["start_time"] = now
         await room.broadcast({
             "type": "next-track",
             "payload": {"track": room.state["track"]},
@@ -623,10 +630,12 @@ async def check_voting_times():
             for item in room.queue:
                 if item.get("isSuggested", False):
                     voting_end_time = item.get("voting_end_time")
+                    # Only auto-approve if voting duration is enabled and time has ended
                     if voting_end_time and now >= voting_end_time:
                         # Voting time ended - check votes
                         votes = item.get("votes", 0)
                         items_to_approve.append((item.get("id"), votes))
+                    # If voting_end_time is None, it means infinite duration - skip auto-approval
             
             # Process items that finished voting
             for item_id, votes in items_to_approve:
@@ -848,7 +857,14 @@ async def ws_endpoint(ws: WebSocket, slug: str):
     # Send current queue when someone joins
     await ws.send_json({
         "type": "queue_sync",
-        "payload": {"queue": room.queue},
+        "payload": {"queue": room.get_queue_for_broadcast()},
+        "server_time": time.time()
+    })
+    
+    # Send room settings when someone joins
+    await ws.send_json({
+        "type": "room_settings",
+        "payload": room.settings,
         "server_time": time.time()
     })
     
@@ -1294,6 +1310,16 @@ async def ws_endpoint(ws: WebSocket, slug: str):
 
             elif t == "chat_message":
                 # Handle chat message from user
+                # Check if chat is enabled or if user is host/moderator
+                if not room.settings.get("chat_enabled", True):
+                    if not room.is_host_or_mod(ws):
+                        await ws.send_json({
+                            "type": "error",
+                            "payload": {"message": "Chat is disabled. Only hosts and moderators can send messages."},
+                            "server_time": time.time()
+                        })
+                        continue
+                
                 message_text = data.get("payload", {}).get("message", "").strip()
                 if not message_text:
                     continue  # Ignore empty messages
@@ -1590,6 +1616,16 @@ async def ws_endpoint(ws: WebSocket, slug: str):
 
             elif t == "suggest_item":
                 # Listeners can suggest items (goes to voting queue)
+                # Check if voting is enabled or if user is host/moderator
+                if not room.settings.get("voting_enabled", True):
+                    if not room.is_host_or_mod(ws):
+                        await ws.send_json({
+                            "type": "error",
+                            "payload": {"message": "Voting is disabled. Only hosts and moderators can suggest items."},
+                            "server_time": time.time()
+                        })
+                        continue
+                
                 now = time.time()
                 item_data = data.get("payload", {}).get("item", {})
                 
@@ -1603,8 +1639,13 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                 
                 # Create suggested queue item
                 unique_id = str(uuid.uuid4())
-                voting_duration = 10.0  # Default 10 seconds
-                voting_end_time = now + voting_duration
+                voting_duration_enabled = room.settings.get("voting_duration_enabled", True)
+                if voting_duration_enabled:
+                    voting_duration = room.settings.get("voting_duration", 10.0)
+                    voting_end_time = now + voting_duration
+                else:
+                    voting_duration = None
+                    voting_end_time = None  # Infinite duration
                 client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
                 
                 queue_item = {
@@ -1684,7 +1725,7 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     })
                     continue
                 
-                # Check if voting has ended
+                # Check if voting has ended (only if duration is enabled)
                 voting_end_time = item.get("voting_end_time")
                 if voting_end_time and now > voting_end_time:
                     await ws.send_json({
@@ -1693,6 +1734,7 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                         "server_time": now
                     })
                     continue
+                # If voting_end_time is None, voting never ends (infinite duration)
                 
                 # Track user votes (using client IP and port as identifier - tied to WebSocket)
                 client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
@@ -1731,6 +1773,64 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     "payload": {"queue": room.get_queue_for_broadcast()},
                     "server_time": now
                 })
+
+            elif t == "update_room_settings":
+                # Check permission - only hosts and moderators can update settings
+                if not room.is_host_or_mod(ws):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only hosts and moderators can update room settings"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # Update room settings
+                now = time.time()
+                new_settings = data.get("payload", {}).get("settings", {})
+                
+                # Validate and update settings
+                if "chat_enabled" in new_settings:
+                    room.settings["chat_enabled"] = bool(new_settings["chat_enabled"])
+                if "voting_enabled" in new_settings:
+                    room.settings["voting_enabled"] = bool(new_settings["voting_enabled"])
+                if "voting_duration" in new_settings:
+                    duration = float(new_settings["voting_duration"])
+                    if duration > 0:
+                        room.settings["voting_duration"] = duration
+                if "voting_duration_enabled" in new_settings:
+                    room.settings["voting_duration_enabled"] = bool(new_settings["voting_duration_enabled"])
+                
+                # Broadcast updated settings to all clients
+                await room.broadcast({
+                    "type": "room_settings",
+                    "payload": room.settings,
+                    "server_time": now
+                })
+                
+                print(f"Room {room.slug}: Settings updated by {user.name}: {room.settings}")
+
+            elif t == "clear_chat":
+                # Check permission - only hosts and moderators can clear chat
+                if not room.is_host_or_mod(ws):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only hosts and moderators can clear chat"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # Clear all chat messages
+                now = time.time()
+                room.chat_messages.clear()
+                
+                # Broadcast chat cleared to all clients
+                await room.broadcast({
+                    "type": "chat_cleared",
+                    "payload": {},
+                    "server_time": now
+                })
+                
+                print(f"Room {room.slug}: Chat cleared by {user.name}")
 
             elif t == "check_room_exists":
                 # Check if a room exists
