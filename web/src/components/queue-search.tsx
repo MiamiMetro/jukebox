@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/types/audio-player";
-import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play, Plus, Vote, CloudUpload, Youtube, Music } from "lucide-react";
+import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play, Plus, Vote, CloudUpload, Youtube, FileAudio } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 
 // Extended track type for queue items with voting
@@ -507,7 +507,6 @@ function SearchTab({
     onSuggest?: (item: QueueItem) => Promise<void> | void;
 }) {
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-    const [selectedSources, setSelectedSources] = useState<Set<"youtube" | "spotify" | "soundcloud">>(new Set(["youtube", "spotify", "soundcloud"]));
     const [isHTML5Mode, setIsHTML5Mode] = useState(false);
     const [html5Url, setHtml5Url] = useState("");
     const [html5Title, setHtml5Title] = useState("");
@@ -523,19 +522,6 @@ function SearchTab({
         retry: 1,
     });
     
-    const toggleSource = (source: "youtube" | "spotify" | "soundcloud") => {
-        setSelectedSources(prev => {
-            const newSet = new Set(prev);
-            if (newSet.has(source)) {
-                // Allow deselecting any source
-                newSet.delete(source);
-            } else {
-                // Add the source
-                newSet.add(source);
-            }
-            return newSet;
-        });
-    };
 
     const downloadMutation = useMutation({
         mutationFn: downloadVideoAPI,
@@ -866,9 +852,8 @@ function SearchTab({
 
     return (
         <div className="space-y-4 min-w-0">
-            {/* Toggle buttons - HTML5 with spacing, then others */}
-            <div className="flex justify-end items-center gap-3">
-                {/* HTML5 toggle - separated with more space */}
+            {/* HTML5 toggle - only toggle remaining */}
+            <div className="flex justify-end items-center">
                 <button
                     onClick={() => setIsHTML5Mode(!isHTML5Mode)}
                     className={cn(
@@ -879,54 +864,8 @@ function SearchTab({
                     )}
                     title="HTML5"
                 >
-                    <CloudUpload className="h-4 w-4" />
+                    <FileAudio className="h-4 w-4" />
                 </button>
-                
-                {/* Source toggles */}
-                <div className="flex gap-1">
-                    <button
-                        onClick={() => toggleSource("youtube")}
-                        disabled={isHTML5Mode}
-                        className={cn(
-                            "p-1.5 rounded border transition-colors",
-                            selectedSources.has("youtube")
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "bg-background border-border hover:bg-muted",
-                            isHTML5Mode && "opacity-50 cursor-not-allowed"
-                        )}
-                        title="YouTube"
-                    >
-                        <Youtube className="h-4 w-4" />
-                    </button>
-                    <button
-                        onClick={() => toggleSource("spotify")}
-                        disabled={isHTML5Mode}
-                        className={cn(
-                            "p-1.5 rounded border transition-colors",
-                            selectedSources.has("spotify")
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "bg-background border-border hover:bg-muted",
-                            isHTML5Mode && "opacity-50 cursor-not-allowed"
-                        )}
-                        title="Spotify"
-                    >
-                        <Music className="h-4 w-4" />
-                    </button>
-                    <button
-                        onClick={() => toggleSource("soundcloud")}
-                        disabled={isHTML5Mode}
-                        className={cn(
-                            "p-1.5 rounded border transition-colors",
-                            selectedSources.has("soundcloud")
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "bg-background border-border hover:bg-muted",
-                            isHTML5Mode && "opacity-50 cursor-not-allowed"
-                        )}
-                        title="SoundCloud"
-                    >
-                        <Music className="h-4 w-4" />
-                    </button>
-                </div>
             </div>
             
             {/* HTML5 Mode: Manual input form */}

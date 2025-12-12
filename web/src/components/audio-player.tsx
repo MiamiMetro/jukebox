@@ -781,7 +781,7 @@ export function AudioPlayer({
           {(playerState.isPlaying && isDancing) && (
             <div className="absolute right-10 md:right-8 top-10 md:top-6 flex items-start z-10 pointer-events-none" style={{ willChange: 'transform' }}>
               <img
-                src="https://media.tenor.com/qiYC04fUus0AAAAj/rainbow-pls-bttv.gif"
+                src="https://media.tenor.com/_LOm-JCkWncAAAAj/alienpls.gif"
                 alt=""
                 className="h-20 w-20 md:h-24 md:w-24 rounded-lg object-cover shrink-0"
                 loading="eager"

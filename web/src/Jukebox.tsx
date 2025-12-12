@@ -8,6 +8,8 @@ import { RoomSelector } from "./components/room-selector";
 import { ListMusic, Users, X } from "lucide-react";
 import { useJukeboxStore } from "./store/jukebox-store";
 import { cn } from "./lib/utils";
+import { NameSetting } from "./components/name-setting";
+import { Chat } from "./components/chat";
 
 function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: string; onRoomChange: (room: string) => void }) {
     // Use Zustand store for shared state
@@ -628,93 +630,14 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
 }
 
 function MiddleBottom({ currentRoom }: { currentRoom: string }) {
-    const { controls, ws, queue } = useJukeboxStore();
-    
     return (
-        <div className="h-full overflow-y-auto">
-            <h2 className="text-2xl font-semibold mb-4">Home</h2>
+        <div className="h-full flex flex-col min-h-0">
+            {/* Name Setting Section at the top */}
+            <NameSetting currentRoom={currentRoom} />
             
-            {/* Debug buttons */}
-            <div className="flex flex-wrap gap-2">
-
-                <Button onClick={() => {
-                    const state = controls?.getState();
-                    console.log("state", state);
-                }}>Get State</Button>
-
-                <Button onClick={() => {
-                    controls?.play();
-                }}>Play</Button>
-
-                <Button onClick={() => {
-                    const data = {
-                        type: "get_state",
-                    };
-                    ws?.send(JSON.stringify(data));
-                    console.log("sent", data);
-                }}>Sync</Button>
-
-                <Button onClick={() => {
-                    const data = {
-                        type: "next-track",
-                    };
-                    ws?.send(JSON.stringify(data));
-                    console.log("sent", data);
-                }}>Next Track</Button>
-
-                <Button onClick={async () => {
-                    if (!currentRoom || currentRoom.trim() === "") {
-                        console.log("No room selected");
-                        return;
-                    }
-                    
-                    try {
-                        const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-                        const response = await fetch(`${apiBase}/api/rooms/${encodeURIComponent(currentRoom)}/users`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            console.log(`Current room (${currentRoom}) users:`, data.users);
-                            console.log(`Total users: ${data.users.length}`);
-                            data.users.forEach((user: any, index: number) => {
-                                console.log(`User ${index + 1}:`, user);
-                            });
-                        } else {
-                            console.error("Failed to get users, status:", response.status);
-                        }
-                    } catch (error) {
-                        console.error("Failed to get users:", error);
-                    }
-                }}>Debug: Get Current Room Users</Button>
-
-                <Button onClick={() => {
-                    console.log("Queue songs:", queue);
-                    console.log(`Total queue items: ${queue.length}`);
-                    queue.forEach((item, index) => {
-                        console.log(`Queue item ${index + 1}:`, {
-                            id: item.id,
-                            title: item.title,
-                            artist: item.artist,
-                            url: item.url,
-                            source: item.source,
-                            duration: item.duration,
-                            votes: item.votes,
-                            isSuggested: item.isSuggested,
-                            isPending: item.isPending,
-                        });
-                    });
-                }}>Debug: Get Queue Songs</Button>
-
-                <Button onClick={() => {
-                    if (!ws || ws.readyState !== WebSocket.OPEN) {
-                        console.log("WebSocket not connected");
-                        return;
-                    }
-                    const data = {
-                        type: "dance",
-                    };
-                    ws.send(JSON.stringify(data));
-                    console.log("sent", data);
-                }}>Debug: Send Dance</Button>
+            {/* Chat Section below */}
+            <div className="flex-1 min-h-0">
+                <Chat currentRoom={currentRoom} />
             </div>
         </div>
     );
@@ -996,7 +919,7 @@ function Jukebox() {
     const [currentRoom, setCurrentRoom] = useState("");
 
     return (
-        <div className="h-screen flex flex-col overflow-hidden">
+        <div className="h-screen flex flex-col overflow-hidden" style={{ height: '100dvh' }}>
             {/* Mobile Drawers - Always mounted, state preserved */}
             <StatefulDrawer
                 open={leftDrawerOpen}
@@ -1059,7 +982,7 @@ function Jukebox() {
                 </div>
 
                 {/* Bottom Middle - Content Area */}
-                <div className="col-start-1 lg:col-start-2 row-start-2 bg-card border rounded-lg p-4 overflow-y-auto">
+                <div className="col-start-1 lg:col-start-2 row-start-2 bg-card border rounded-lg p-4 flex flex-col min-h-0">
                     <MiddleBottom currentRoom={currentRoom} />
                 </div>
 

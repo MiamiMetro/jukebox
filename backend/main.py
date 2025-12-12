@@ -23,6 +23,17 @@ class User:
     client_ip: str = "unknown"
 
 @dataclass
+class ChatMessage:
+    """Represents a chat message"""
+    id: str
+    name: str
+    message: str
+    timestamp: float
+    role: str = "listener"  # "host", "moderator", "listener"
+    client_ip: str = "unknown"
+    is_deleted: bool = False
+
+@dataclass
 class Room:
     """Represents a room with its state"""
     slug: str
@@ -37,6 +48,7 @@ class Room:
     users: Dict[WebSocket, User] = field(default_factory=dict)
     host: Optional[WebSocket] = None
     created_at: float = field(default_factory=time.time)
+    chat_messages: list = field(default_factory=list)  # Max 10 messages
     
     def get_user(self, ws: WebSocket) -> Optional[User]:
         """Get user by websocket"""
@@ -196,6 +208,36 @@ class Room:
                 await self.remove_user(ws)
             except Exception:
                 pass  # Already removed or connection dead
+    
+    def add_chat_message(self, user: User, message: str) -> ChatMessage:
+        """Add a chat message to the room (keeps only last 10)"""
+        msg_id = str(uuid.uuid4())
+        chat_msg = ChatMessage(
+            id=msg_id,
+            name=user.name,
+            message=message,
+            timestamp=time.time(),
+            role=user.role,
+            client_ip=user.client_ip,
+            is_deleted=False
+        )
+        self.chat_messages.append(chat_msg)
+        # Keep only last 10 messages
+        if len(self.chat_messages) > 10:
+            self.chat_messages = self.chat_messages[-10:]
+        return chat_msg
+    
+    def delete_chat_message(self, message_id: str) -> Optional[ChatMessage]:
+        """Mark a chat message as deleted (like Twitch)"""
+        for msg in self.chat_messages:
+            if msg.id == message_id:
+                msg.is_deleted = True
+                return msg
+        return None
+    
+    def get_chat_messages(self) -> list:
+        """Get all chat messages (for late joiners)"""
+        return self.chat_messages
 
 # Store all rooms by slug
 rooms: Dict[str, Room] = {}
@@ -736,6 +778,27 @@ async def ws_endpoint(ws: WebSocket, slug: str):
         },
         "server_time": time.time()
     })
+    
+    # Send last 10 chat messages to late joiners
+    chat_history = room.get_chat_messages()
+    if chat_history:
+        await ws.send_json({
+            "type": "chat_history",
+            "payload": {
+                "messages": [
+                    {
+                        "id": msg.id,
+                        "name": msg.name,
+                        "message": msg.message,
+                        "timestamp": msg.timestamp,
+                        "role": msg.role,
+                        "is_deleted": msg.is_deleted,
+                    }
+                    for msg in chat_history
+                ]
+            },
+            "server_time": time.time()
+        })
 
     try:
         while True:
@@ -1102,12 +1165,109 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     "server_time": now
                 })
 
+            elif t == "set_name":
+                # Update user's name
+                new_name = data.get("payload", {}).get("name", "").strip()
+                if not new_name:
+                    new_name = "No name"
+                
+                # Limit name to 16 characters
+                if len(new_name) > 16:
+                    new_name = new_name[:16]
+                
+                user.name = new_name
+                
+                # Send updated user_info to the user
+                client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
+                await ws.send_json({
+                    "type": "user_info",
+                    "payload": {
+                        "name": user.name,
+                        "role": user.role,
+                        "is_host": user.role == "host",
+                        "is_moderator": user.role in ("host", "moderator"),
+                        "client_ip": user.client_ip,
+                        "client_port": client_port,
+                    },
+                    "server_time": time.time()
+                })
+                
+                # Broadcast updated user list
+                await room.broadcast_users()
+
             elif t == "dance":
                 # Broadcast dance command to all users in this room
                 now = time.time()
                 await room.broadcast({
                     "type": "dance",
                     "payload": {},
+                    "server_time": now
+                })
+
+            elif t == "chat_message":
+                # Handle chat message from user
+                message_text = data.get("payload", {}).get("message", "").strip()
+                if not message_text:
+                    continue  # Ignore empty messages
+                
+                # Limit message to 400 characters
+                if len(message_text) > 400:
+                    message_text = message_text[:400]
+                
+                # Add message to room's chat history
+                chat_msg = room.add_chat_message(user, message_text)
+                
+                # Broadcast to all users in room
+                now = time.time()
+                await room.broadcast({
+                    "type": "chat_message",
+                    "payload": {
+                        "id": chat_msg.id,
+                        "name": chat_msg.name,
+                        "message": chat_msg.message,
+                        "timestamp": chat_msg.timestamp,
+                        "role": chat_msg.role,
+                        "is_deleted": False,
+                    },
+                    "server_time": now
+                }, exclude=None)  # Include sender too
+
+            elif t == "delete_chat_message":
+                # Check permission - only hosts and moderators can delete messages
+                if not room.is_host_or_mod(ws):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Only hosts and moderators can delete messages"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # Delete (mark as deleted) the message
+                message_id = data.get("payload", {}).get("message_id")
+                if not message_id:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Invalid message ID"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                deleted_msg = room.delete_chat_message(message_id)
+                if not deleted_msg:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Message not found"},
+                        "server_time": time.time()
+                    })
+                    continue
+                
+                # Broadcast deletion to all users
+                now = time.time()
+                await room.broadcast({
+                    "type": "chat_message_deleted",
+                    "payload": {
+                        "message_id": message_id,
+                    },
                     "server_time": now
                 })
 
