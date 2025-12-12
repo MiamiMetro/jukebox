@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
-import { Plus, Search, Users, Music, ChevronDown, LogOut } from "lucide-react";
+import { Plus, Users, Music, ChevronDown, LogOut } from "lucide-react";
 import { cn } from "../lib/utils";
 
 interface Room {
@@ -18,16 +18,16 @@ interface RoomSelectorProps {
     onRoomChange?: (roomSlug: string) => void;
 }
 
-export function RoomSelector({ ws, currentRoom, onRoomChange }: RoomSelectorProps) {
+export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelectorProps) {
     const [searchQuery, setSearchQuery] = useState(currentRoom || "");
     const [isOpen, setIsOpen] = useState(false);
     const [rooms, setRooms] = useState<Room[]>([]);
-    const [page, setPage] = useState(0);
+    const [_page, setPage] = useState(0);
     const [hasMore, setHasMore] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
     const [roomExists, setRoomExists] = useState<boolean | null>(null);
     const [checkingRoom, setCheckingRoom] = useState(false);
-    const [currentRoomInfo, setCurrentRoomInfo] = useState<Room | null>(null);
+    const [_currentRoomInfo, setCurrentRoomInfo] = useState<Room | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const observerTarget = useRef<HTMLDivElement>(null);

@@ -68,7 +68,7 @@ export function AudioPlayer({
   onTrackEnd,
   onTimeSync,
   events,
-  liveTime = 0,
+  liveTime: _liveTime = 0,
   className,
   onNext,
   onPrevious,
@@ -92,7 +92,7 @@ export function AudioPlayer({
     containerId,
   } = useAudioPlayer({ mode, onTrackEnd, onTimeSync })
 
-  const [isDragging, setIsDragging] = useState(false)
+  const [_isDragging, setIsDragging] = useState(false)
   const wasPlayingBeforeSeekRef = useRef<boolean>(false)
   const isSeekingRef = useRef<boolean>(false)
   const isMobile = useIsMobile()

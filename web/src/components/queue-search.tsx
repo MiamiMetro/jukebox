@@ -67,15 +67,15 @@ const downloadVideoAPI = async (videoId: string) => {
     return response.json();
 };
 
-const getDownloadUrlAPI = async (videoId: string) => {
-    const response = await fetch(
-        `${API_BASE}/api/youtube/download-url/${videoId}?format=bestaudio/best`
-    );
-    if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return response.json();
-};
+// const getDownloadUrlAPI = async (videoId: string) => {
+//     const response = await fetch(
+//         `${API_BASE}/api/youtube/download-url/${videoId}?format=bestaudio/best`
+//     );
+//     if (!response.ok) {
+//         throw new Error(`HTTP error! status: ${response.status}`);
+//     }
+//     return response.json();
+// };
 
 export function QueueSearch({ 
     mode, 
@@ -89,6 +89,7 @@ export function QueueSearch({
     onReorder,
     onAddToQueue,
     onSuggest,
+    onVote,
 }: QueueSearchProps) {
     const { roomSettings } = useJukeboxStore();
     const [activeTab, setActiveTab] = useState<"queue" | "search">("queue");
@@ -314,8 +315,8 @@ export function QueueSearch({
                                 return queueItemsWithVotes.map((item, index) => {
                                     // Use index as fallback key if ID is invalid
                                     const itemKey = (item && item.id && String(item.id).trim() !== "") ? item.id : `item-${index}`;
-                                    const isCurrentTrack = currentTrackId === item.id;
-                                    const isNextTrack = item.id === nextTrackId && !item.isSuggested && !item.isPending;
+                                    // const isCurrentTrack = currentTrackId === item.id;
+                                    // const isNextTrack = item.id === nextTrackId && !item.isSuggested && !item.isPending;
                                     
                                     return (
                                         <div key={itemKey} className="text-sm text-muted-foreground p-2">
@@ -682,7 +683,7 @@ function SearchTab({
                 audio.addEventListener('loadedmetadata', onLoadedMetadata);
                 audio.addEventListener('error', onError);
             });
-        } catch (error) {
+        } catch {
             setHtml5Duration(null);
             setIsUrlValid(false);
             setIsLoadingDuration(false);
@@ -852,6 +853,9 @@ function SearchTab({
         try {
             console.log("handleSuggestHTML5: Sending suggest_item immediately (download will happen in background)");
 
+            // Duration is 1.25 seconds less than original
+            const duration = result.duration ? Math.max(1, result.duration - 1.25) : undefined;
+
             // Send via WebSocket immediately (download happens in background on backend)
             if (ws && ws.readyState === WebSocket.OPEN) {
                 console.log("handleSuggestHTML5: Sending suggest_item via WebSocket");
@@ -864,7 +868,7 @@ function SearchTab({
                             artist: result.channel || "Unknown Artist",
                             url: "", // Empty URL - will be set when download completes
                             source: "html5",
-                            duration: result.duration,
+                            duration: duration,
                             artwork: result.thumbnail,
                             video_id: result.id, // For background download
                         }
@@ -882,7 +886,7 @@ function SearchTab({
                         artist: result.channel || "Unknown Artist",
                         url: "",
                         source: "html5",
-                        duration: result.duration,
+                        duration: duration,
                         artwork: result.thumbnail,
                         isSuggested: true,
                         votes: 0,
@@ -904,13 +908,16 @@ function SearchTab({
             return;
         }
         
+        // Duration is 1.25 seconds less than original
+        const duration = html5Duration ? Math.max(1, html5Duration - 1.25) : undefined;
+        
         const queueItem: QueueItem = {
             id: `html5-${Date.now()}`,
             title: html5Title.trim() || "Unknown Title",
             artist: html5Artist.trim() || "Unknown Artist",
             url: html5Url.trim(),
             source: "html5",
-            duration: html5Duration || undefined,
+            duration: duration,
             artwork: "https://placehold.co/800?text=HTML5",
         };
 
@@ -954,6 +961,9 @@ function SearchTab({
         
         console.log("handleSuggestHTML5Direct: Sending HTML5 direct suggestion");
 
+        // Duration is 1.25 seconds less than original
+        const duration = html5Duration ? Math.max(1, html5Duration - 1.25) : undefined;
+
         // Send via WebSocket if available
         if (ws && ws.readyState === WebSocket.OPEN) {
             console.log("handleSuggestHTML5Direct: Sending suggest_item via WebSocket");
@@ -966,7 +976,7 @@ function SearchTab({
                         artist: html5Artist.trim() || "Unknown Artist",
                         url: html5Url.trim(),
                         source: "html5",
-                        duration: html5Duration || undefined,
+                        duration: duration,
                         artwork: undefined,
                     }
                 }
@@ -987,6 +997,7 @@ function SearchTab({
                     artist: html5Artist.trim() || "Unknown Artist",
                     url: html5Url.trim(),
                     source: "html5",
+                    duration: duration,
                     artwork: undefined,
                     isSuggested: true,
                     votes: 0,
@@ -1079,7 +1090,7 @@ function SearchTab({
                             disabled={
                                 !html5Url.trim() || 
                                 !isUrlValid || 
-                                (roomSettings && !roomSettings.voting_enabled && mode === "listener")
+                                !!(roomSettings && !roomSettings.voting_enabled && mode === "listener")
                             }
                             variant="outline"
                             className="w-full"
@@ -1209,7 +1220,7 @@ function SearchTab({
                                                 variant="outline"
                                                 className="h-8 w-8"
                                                 onClick={() => setOpenMenuId(openMenuId === `vote-${result.id}` ? null : `vote-${result.id}`)}
-                                                disabled={roomSettings && !roomSettings.voting_enabled && mode === "listener"}
+                                                disabled={!!(roomSettings && !roomSettings.voting_enabled && mode === "listener")}
                                                 title={
                                                     roomSettings && !roomSettings.voting_enabled && mode === "listener"
                                                         ? "Voting is disabled"
