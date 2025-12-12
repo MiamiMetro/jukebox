@@ -82,7 +82,32 @@ class Room:
         if ws in self.users:
             user = self.users[ws]
             was_host = user.role == "host"
+            
+            # Clean up votes from this user's WebSocket
+            client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
+            user_key = f"{user.client_ip}:{client_port}"
+            votes_were_removed = False
+            for item in self.queue:
+                if item.get("isSuggested", False) and "user_votes" in item:
+                    if user_key in item["user_votes"]:
+                        previous_vote = item["user_votes"][user_key]
+                        # Remove the vote and update vote count
+                        del item["user_votes"][user_key]
+                        votes_were_removed = True
+                        if previous_vote == "up":
+                            item["votes"] = max(0, item.get("votes", 0) - 1)
+                        elif previous_vote == "down":
+                            item["votes"] = item.get("votes", 0) + 1  # Removing down vote increases total
+            
             del self.users[ws]
+            
+            # If votes were removed, broadcast updated queue to all clients
+            if votes_were_removed:
+                await self.broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": self.get_queue_for_broadcast()},
+                    "server_time": time.time()
+                })
             
             # If host left, assign new host (first moderator or first user with active connection)
             if was_host and self.host == ws:
@@ -238,6 +263,17 @@ class Room:
     def get_chat_messages(self) -> list:
         """Get all chat messages (for late joiners)"""
         return self.chat_messages
+    
+    def get_queue_for_broadcast(self) -> list:
+        """Get queue without user_votes for privacy (for broadcasting)"""
+        queue_for_broadcast = []
+        for q_item in self.queue:
+            q_item_copy = q_item.copy()
+            # Remove user_votes from broadcast (privacy)
+            if "user_votes" in q_item_copy:
+                del q_item_copy["user_votes"]
+            queue_for_broadcast.append(q_item_copy)
+        return queue_for_broadcast
 
 # Store all rooms by slug
 rooms: Dict[str, Room] = {}
@@ -313,7 +349,7 @@ async def start_pending_download(room: Room, queue_item_id: str, client_ip: str,
                         # Broadcast updated queue
                         await room.broadcast({
                             "type": "queue_sync",
-                            "payload": {"queue": room.queue},
+                            "payload": {"queue": room.get_queue_for_broadcast()},
                             "server_time": time.time()
                         })
                         
@@ -575,12 +611,64 @@ async def check_track_end():
                     print(f"Room {room.slug}: Track ended: {track_title}, advancing to next track")
                     await advance_to_next_track(room)
 
+async def check_voting_times():
+    """Background task that checks voting times and auto-approves items"""
+    while True:
+        await asyncio.sleep(1)  # Check every second
+        
+        for room in list(rooms.values()):
+            now = time.time()
+            items_to_approve = []
+            
+            for item in room.queue:
+                if item.get("isSuggested", False):
+                    voting_end_time = item.get("voting_end_time")
+                    if voting_end_time and now >= voting_end_time:
+                        # Voting time ended - check votes
+                        votes = item.get("votes", 0)
+                        items_to_approve.append((item.get("id"), votes))
+            
+            # Process items that finished voting
+            for item_id, votes in items_to_approve:
+                item_found = False
+                for item in room.queue:
+                    if item.get("id") == item_id:
+                        item_found = True
+                        if votes >= 0:
+                            # Votes are >= 0, approve the item
+                            item["isSuggested"] = False
+                            # Remove voting metadata
+                            if "voting_end_time" in item:
+                                del item["voting_end_time"]
+                            if "user_votes" in item:
+                                del item["user_votes"]
+                            print(f"Room {room.slug}: Auto-approved item {item.get('title', 'Unknown')} with {votes} votes")
+                            
+                            # If no current track and item has URL, set it as current track
+                            if not room.state.get("track") and item.get("url"):
+                                await set_first_available_track(room)
+                        else:
+                            # Votes are < 0, remove the item from queue
+                            room.queue.remove(item)
+                            print(f"Room {room.slug}: Removed item {item.get('title', 'Unknown')} with {votes} votes (below threshold)")
+                        break
+                
+                if item_found:
+                    # Broadcast updated queue
+                    await room.broadcast({
+                        "type": "queue_sync",
+                        "payload": {"queue": room.get_queue_for_broadcast()},
+                        "server_time": time.time()
+                    })
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
     # Startup
     asyncio.create_task(check_track_end())
+    asyncio.create_task(check_voting_times())
     print("Track end monitoring started")
+    print("Voting time monitoring started")
     yield
     # Shutdown (if needed in the future)
     pass
@@ -1356,7 +1444,7 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                         # Broadcast updated queue to all clients
                         await room.broadcast({
                             "type": "queue_sync",
-                            "payload": {"queue": room.queue},
+                            "payload": {"queue": room.get_queue_for_broadcast()},
                             "server_time": now
                         })
 
@@ -1376,17 +1464,28 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                 
                 if item_id:
                     # Find and update the item
+                    approved_item = None
                     for item in room.queue:
                         if item.get("id") == item_id:
                             item["isSuggested"] = False
+                            # Remove voting metadata
+                            if "voting_end_time" in item:
+                                del item["voting_end_time"]
+                            if "user_votes" in item:
+                                del item["user_votes"]
+                            approved_item = item
                             break
                     
                     # Broadcast updated queue to all clients
                     await room.broadcast({
                         "type": "queue_sync",
-                        "payload": {"queue": room.queue},
+                        "payload": {"queue": room.get_queue_for_broadcast()},
                         "server_time": now
                     })
+                    
+                    # If no current track and approved item has URL, set it as current track
+                    if approved_item and not room.state.get("track") and approved_item.get("url"):
+                        await set_first_available_track(room)
 
             elif t == "add_to_queue":
                 # Check permission
@@ -1488,6 +1587,150 @@ async def ws_endpoint(ws: WebSocket, slug: str):
                     
                     # Start download in background (size check happens inside start_pending_download)
                     asyncio.create_task(start_pending_download(room, queue_item["id"], client_ip, item_data.get("video_id")))
+
+            elif t == "suggest_item":
+                # Listeners can suggest items (goes to voting queue)
+                now = time.time()
+                item_data = data.get("payload", {}).get("item", {})
+                
+                if not item_data:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Invalid item data"},
+                        "server_time": now
+                    })
+                    continue
+                
+                # Create suggested queue item
+                unique_id = str(uuid.uuid4())
+                voting_duration = 10.0  # Default 10 seconds
+                voting_end_time = now + voting_duration
+                client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
+                
+                queue_item = {
+                    "id": unique_id,
+                    "title": item_data.get("title", "Unknown"),
+                    "artist": item_data.get("artist", "Unknown Artist"),
+                    "url": item_data.get("url", ""),
+                    "artwork": item_data.get("artwork"),
+                    "source": item_data.get("source", "html5"),
+                    "duration": item_data.get("duration"),
+                    "isSuggested": True,
+                    "votes": 0,
+                    "voting_end_time": voting_end_time,
+                    "user_votes": {},  # Track votes by user_key (client_ip:client_port)
+                    "video_id": item_data.get("video_id"),  # For HTML5 downloads
+                }
+                
+                # If HTML5 source and has video_id but no URL, mark as pending and start download
+                if queue_item["source"] == "html5" and queue_item.get("video_id") and not queue_item.get("url"):
+                    queue_item["isPending"] = True
+                    print(f"Room {room.slug}: Adding suggested HTML5 item (pending download): {queue_item['title']} (id: {unique_id}, video_id: {queue_item['video_id']})")
+                else:
+                    print(f"Room {room.slug}: Adding suggested item: {queue_item['title']} (id: {unique_id})")
+                
+                # Add to queue
+                room.queue.append(queue_item)
+                
+                # Broadcast updated queue to all clients (without user_votes for privacy)
+                await room.broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": room.get_queue_for_broadcast()},
+                    "server_time": now
+                })
+                
+                print(f"Room {room.slug}: Broadcasted queue_sync with {len(room.queue)} items")
+                
+                # If HTML5 and needs download, start download in background
+                if queue_item.get("source") == "html5" and queue_item.get("video_id") and queue_item.get("isPending", False):
+                    # Start download in background (start_pending_download handles queuing internally)
+                    asyncio.create_task(start_pending_download(room, queue_item["id"], current_client_ip, queue_item.get("video_id")))
+                    print(f"Room {room.slug}: Started background download for suggested HTML5 item: {queue_item['title']} (video_id: {queue_item.get('video_id')})")
+
+            elif t == "vote_up" or t == "vote_down":
+                # Listeners can vote on suggested items
+                now = time.time()
+                item_id = data.get("payload", {}).get("item_id")
+                vote_type = "up" if t == "vote_up" else "down"
+                
+                if not item_id:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Invalid item ID"},
+                        "server_time": now
+                    })
+                    continue
+                
+                # Find the item
+                item = None
+                for q_item in room.queue:
+                    if q_item.get("id") == item_id:
+                        item = q_item
+                        break
+                
+                if not item:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Item not found"},
+                        "server_time": now
+                    })
+                    continue
+                
+                if not item.get("isSuggested", False):
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Can only vote on suggested items"},
+                        "server_time": now
+                    })
+                    continue
+                
+                # Check if voting has ended
+                voting_end_time = item.get("voting_end_time")
+                if voting_end_time and now > voting_end_time:
+                    await ws.send_json({
+                        "type": "error",
+                        "payload": {"message": "Voting has ended"},
+                        "server_time": now
+                    })
+                    continue
+                
+                # Track user votes (using client IP and port as identifier - tied to WebSocket)
+                client_port = ws.client.port if hasattr(ws, 'client') and ws.client else None
+                user_key = f"{current_client_ip}:{client_port}"
+                
+                # Initialize vote tracking if not exists
+                if "user_votes" not in item:
+                    item["user_votes"] = {}
+                
+                # Get previous vote
+                previous_vote = item["user_votes"].get(user_key)
+                
+                # Calculate votes as: upvote_count - downvote_count
+                # First, remove the previous vote's effect
+                if previous_vote == "up":
+                    item["votes"] = item.get("votes", 0) - 1  # Remove up vote
+                elif previous_vote == "down":
+                    item["votes"] = item.get("votes", 0) + 1  # Remove down vote (adds back)
+                
+                # Now apply the new vote (or remove if same vote clicked)
+                if previous_vote == vote_type:
+                    # Same vote clicked - remove vote (toggle off)
+                    del item["user_votes"][user_key]
+                    # Vote already removed above, no need to do anything else
+                else:
+                    # Different vote or new vote
+                    item["user_votes"][user_key] = vote_type
+                    if vote_type == "up":
+                        item["votes"] = item.get("votes", 0) + 1  # Add up vote
+                    else:  # down vote
+                        item["votes"] = item.get("votes", 0) - 1  # Subtract down vote
+                
+                # Broadcast updated queue (without user_votes for privacy)
+                await room.broadcast({
+                    "type": "queue_sync",
+                    "payload": {"queue": room.get_queue_for_broadcast()},
+                    "server_time": now
+                })
 
             elif t == "check_room_exists":
                 # Check if a room exists

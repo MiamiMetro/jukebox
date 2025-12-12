@@ -375,6 +375,7 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                 const backendQueue = data.payload.queue || [];
                 console.log("Received queue_sync:", backendQueue);
                 // Convert backend queue format to QueueItem format
+                // Note: Backend no longer sends user_votes for privacy, so userVote is tracked locally
                 const queueItems: import("./components/queue-search").QueueItem[] = backendQueue.map((item: any) => ({
                     id: String(item.id || ""),
                     title: item.title || "Unknown",
@@ -384,10 +385,11 @@ function AudioPlayerContainer({ currentRoom, onRoomChange }: { currentRoom: stri
                     duration: item.duration,
                     artwork: item.artwork,
                     isSuggested: item.isSuggested || false,
-                    votes: item.votes || 0,
-                    userVote: item.userVote || null,
+                    votes: item.votes || 0, // votes = upvotes - downvotes
+                    userVote: null, // Will be tracked locally in queue-search component
                     isPending: item.isPending || false,
                     video_id: item.video_id,
+                    voting_end_time: item.voting_end_time, // Include voting end time
                 }));
                 console.log("Setting queue items:", queueItems);
                 setStoreQueue(queueItems);

@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/types/audio-player";
-import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play, Plus, Vote, CloudUpload, Youtube, FileAudio } from "lucide-react";
+import { ChevronUp, ChevronDown, Trash2, Check, X, Music2, Play, Plus, Vote, Youtube, FileAudio } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 
 // Extended track type for queue items with voting
@@ -14,6 +14,7 @@ export interface QueueItem extends Track {
     isNext?: boolean; // Manual flag for "Next" indicator
     isPending?: boolean; // Item is pending download
     video_id?: string; // Video ID for pending downloads
+    voting_end_time?: number; // Timestamp when voting ends
 }
 
 interface QueueSearchProps {
@@ -78,7 +79,7 @@ const getDownloadUrlAPI = async (videoId: string) => {
 export function QueueSearch({ 
     mode, 
     isDrawer = false, 
-    onClose, 
+    onClose,
     currentTrackId,
     queueItems: externalQueueItems,
     ws,
@@ -90,6 +91,8 @@ export function QueueSearch({
 }: QueueSearchProps) {
     const [activeTab, setActiveTab] = useState<"queue" | "search">("queue");
     const [isEditMode, setIsEditMode] = useState(false);
+    const [currentTime, setCurrentTime] = useState(Date.now() / 1000); // Current time in seconds
+    const [userVotes, setUserVotes] = useState<Map<string, "up" | "down">>(new Map()); // Track user votes locally
     
     // Use prop mode directly (set from backend based on user role)
     const effectiveMode = mode;
@@ -97,6 +100,20 @@ export function QueueSearch({
     
     // Use external queue items from WebSocket/backend - no internal state
     const queueItems = externalQueueItems || [];
+    
+    // Update current time every second for voting progress
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setCurrentTime(Date.now() / 1000);
+        }, 1000);
+        return () => clearInterval(interval);
+    }, []);
+    
+    // Merge user votes into queue items
+    const queueItemsWithVotes = queueItems.map(item => ({
+        ...item,
+        userVote: userVotes.get(item.id) || null,
+    }));
     
     // Debug: Log queue items
     useEffect(() => {
@@ -110,10 +127,49 @@ export function QueueSearch({
         return `${mins}:${secs.toString().padStart(2, "0")}`;
     };
 
-    const handleVote = async (_itemId: string, _vote: "up" | "down") => {
-        // Vote functionality disabled for now - buttons will be non-functional
-        // This will be implemented later
-        console.log("Vote functionality disabled");
+    const handleVote = async (itemId: string, vote: "up" | "down") => {
+        // Update local vote state immediately for better UX
+        const currentVote = userVotes.get(itemId);
+        if (currentVote === vote) {
+            // Same vote clicked - remove vote (toggle off)
+            setUserVotes(prev => {
+                const newMap = new Map(prev);
+                newMap.delete(itemId);
+                return newMap;
+            });
+        } else {
+            // Different vote or new vote
+            setUserVotes(prev => {
+                const newMap = new Map(prev);
+                newMap.set(itemId, vote);
+                return newMap;
+            });
+        }
+        
+        // Send vote via WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: vote === "up" ? "vote_up" : "vote_down",
+                payload: { item_id: itemId }
+            }));
+        } else if (onVote) {
+            // Fallback to callback if WebSocket not available
+            try {
+                await onVote(itemId, vote);
+            } catch (error) {
+                console.error("Vote failed:", error);
+                // Revert local state on error
+                setUserVotes(prev => {
+                    const newMap = new Map(prev);
+                    if (currentVote) {
+                        newMap.set(itemId, currentVote);
+                    } else {
+                        newMap.delete(itemId);
+                    }
+                    return newMap;
+                });
+            }
+        }
     };
 
     const handleApprove = async (itemId: string) => {
@@ -231,15 +287,15 @@ export function QueueSearch({
                     <div className="p-4 space-y-2">
                         {(() => {
                             // Find current track index
-                            const currentIndex = queueItems.findIndex(item => item.id === currentTrackId);
+                            const currentIndex = queueItemsWithVotes.findIndex(item => item.id === currentTrackId);
                             
                             // Find next track (not suggested and not pending) after current track
                             let nextTrackId: string | null = null;
                             if (currentIndex >= 0) {
                                 // Look for next non-suggested, non-pending track after current
-                                for (let i = 1; i < queueItems.length; i++) {
-                                    const nextIndex = (currentIndex + i) % queueItems.length;
-                                    const nextItem = queueItems[nextIndex];
+                                for (let i = 1; i < queueItemsWithVotes.length; i++) {
+                                    const nextIndex = (currentIndex + i) % queueItemsWithVotes.length;
+                                    const nextItem = queueItemsWithVotes[nextIndex];
                                     if (!nextItem.isSuggested && !nextItem.isPending) {
                                         nextTrackId = nextItem.id;
                                         break;
@@ -248,12 +304,12 @@ export function QueueSearch({
                             }
                             
                             // Filter out items without valid IDs (non-empty string)
-                            const validQueueItems = queueItems.filter(item => item && item.id && String(item.id).trim() !== "");
+                            const validQueueItems = queueItemsWithVotes.filter(item => item && item.id && String(item.id).trim() !== "");
                             
-                            if (validQueueItems.length === 0 && queueItems.length > 0) {
-                                console.warn("QueueSearch: Found items but none have valid IDs:", queueItems);
+                            if (validQueueItems.length === 0 && queueItemsWithVotes.length > 0) {
+                                console.warn("QueueSearch: Found items but none have valid IDs:", queueItemsWithVotes);
                                 // If no valid items but we have items, show them anyway (might be pending items)
-                                return queueItems.map((item, index) => {
+                                return queueItemsWithVotes.map((item, index) => {
                                     // Use index as fallback key if ID is invalid
                                     const itemKey = (item && item.id && String(item.id).trim() !== "") ? item.id : `item-${index}`;
                                     const isCurrentTrack = currentTrackId === item.id;
@@ -267,7 +323,7 @@ export function QueueSearch({
                                 });
                             }
                             
-                            return validQueueItems.map((item, index) => {
+                            return queueItemsWithVotes.map((item, index) => {
                                 const isCurrentTrack = currentTrackId === item.id;
                                 const isNextTrack = item.id === nextTrackId && !item.isSuggested && !item.isPending;
                                 // Create unique key by combining ID with index to handle duplicates
@@ -284,14 +340,14 @@ export function QueueSearch({
                                             <button
                                                 onClick={() => handleReorder(item.id, "up")}
                                                 className="p-1 hover:bg-muted rounded transition-colors"
-                                                disabled={queueItems.indexOf(item) === 0}
+                                                disabled={queueItemsWithVotes.indexOf(item) === 0}
                                             >
                                                 <ChevronUp className="h-4 w-4" />
                                             </button>
                                             <button
                                                 onClick={() => handleReorder(item.id, "down")}
                                                 className="p-1 hover:bg-muted rounded transition-colors"
-                                                disabled={queueItems.indexOf(item) === queueItems.length - 1}
+                                                disabled={queueItemsWithVotes.indexOf(item) === queueItemsWithVotes.length - 1}
                                             >
                                                 <ChevronDown className="h-4 w-4" />
                                             </button>
@@ -301,8 +357,8 @@ export function QueueSearch({
                                     {/* Card - Same for all items */}
                                     <div
                                         onClick={() => {
-                                            // Only allow host to change track, and don't allow clicking pending items
-                                            if (effectiveMode === "host" && !item.isPending) {
+                                            // Only allow host to change track, and don't allow clicking pending or suggested items
+                                            if (effectiveMode === "host" && !item.isPending && !item.isSuggested) {
                                                 // Don't do anything if clicking the current track
                                                 if (item.id === currentTrackId) {
                                                     return;
@@ -339,9 +395,9 @@ export function QueueSearch({
                                             isCurrentTrack && "bg-primary/10 border-primary",
                                             isNextTrack && "bg-muted/30",
                                             item.isPending && "opacity-50", // Faded appearance for pending items
-                                            !isEditMode && !item.isPending && "hover:bg-muted/50",
-                                            effectiveMode === "host" && item.id !== currentTrackId && !item.isPending && "cursor-pointer",
-                                            effectiveMode === "host" && (item.id === currentTrackId || item.isPending) && "cursor-default"
+                                            !isEditMode && !item.isPending && !item.isSuggested && "hover:bg-muted/50",
+                                            effectiveMode === "host" && item.id !== currentTrackId && !item.isPending && !item.isSuggested && "cursor-pointer",
+                                            effectiveMode === "host" && (item.id === currentTrackId || item.isPending || item.isSuggested) && "cursor-default"
                                         )}
                                     >
                                         {/* Now Playing / Next indicator - Top right */}
@@ -396,6 +452,17 @@ export function QueueSearch({
                                             <div className="text-sm text-muted-foreground">
                                                 {formatDuration(item.duration)}
                                             </div>
+                                            {/* Voting progress bar (non-invasive, only for suggested items) */}
+                                            {item.isSuggested && item.voting_end_time && (
+                                                <div className="mt-1 h-0.5 bg-muted rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-primary transition-all duration-300"
+                                                        style={{
+                                                            width: `${Math.max(0, Math.min(100, ((item.voting_end_time - currentTime) / 10) * 100))}%`
+                                                        }}
+                                                    />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
 
@@ -404,12 +471,13 @@ export function QueueSearch({
                                     <div className="flex flex-col items-center gap-1">
                                         <button
                                             onClick={() => handleVote(item.id, "up")}
-                                            disabled={true}
+                                            disabled={!item.voting_end_time || currentTime >= item.voting_end_time}
                                             className={cn(
-                                                "p-1 rounded hover:bg-muted transition-colors opacity-50 cursor-not-allowed",
-                                                item.userVote === "up" && "bg-primary/20"
+                                                "p-1 rounded hover:bg-muted transition-colors",
+                                                item.userVote === "up" && "bg-primary/20",
+                                                (!item.voting_end_time || currentTime >= item.voting_end_time) && "opacity-50 cursor-not-allowed"
                                             )}
-                                            title="Voting disabled for now"
+                                            title={(!item.voting_end_time || currentTime >= item.voting_end_time) ? "Voting has ended" : "Vote up"}
                                         >
                                             <ChevronUp className="h-4 w-4" />
                                         </button>
@@ -418,12 +486,13 @@ export function QueueSearch({
                                         </span>
                                         <button
                                             onClick={() => handleVote(item.id, "down")}
-                                            disabled={true}
+                                            disabled={!item.voting_end_time || currentTime >= item.voting_end_time}
                                             className={cn(
-                                                "p-1 rounded hover:bg-muted transition-colors opacity-50 cursor-not-allowed",
-                                                item.userVote === "down" && "bg-primary/20"
+                                                "p-1 rounded hover:bg-muted transition-colors",
+                                                item.userVote === "down" && "bg-primary/20",
+                                                (!item.voting_end_time || currentTime >= item.voting_end_time) && "opacity-50 cursor-not-allowed"
                                             )}
-                                            title="Voting disabled for now"
+                                            title={(!item.voting_end_time || currentTime >= item.voting_end_time) ? "Voting has ended" : "Vote down"}
                                         >
                                             <ChevronDown className="h-4 w-4" />
                                         </button>
@@ -719,23 +788,51 @@ function SearchTab({
 
     const handleSuggestYouTube = async (result: any) => {
         try {
-            const urlData = await getDownloadUrlAPI(result.id);
+            // For YouTube source, use the YouTube watch URL (not the streaming URL)
+            // The YouTube adapter will extract the video ID from this URL
+            const youtubeWatchUrl = `https://www.youtube.com/watch?v=${result.id}`;
             
-            const queueItem: QueueItem = {
-                id: result.id,
-                title: result.title,
-                artist: result.channel || "Unknown Artist",
-                url: urlData.url,
-                source: "youtube",
-                duration: result.duration,
-                artwork: result.thumbnail,
-                isSuggested: true,
-                votes: 0,
-                userVote: null,
-            };
+            // Duration is 1 second less than original
+            const duration = result.duration ? Math.max(1, result.duration - 1) : undefined;
 
-            if (onSuggest) {
-                await onSuggest(queueItem);
+            // Send via WebSocket if available
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("handleSuggestYouTube: Sending suggest_item via WebSocket");
+                ws.send(JSON.stringify({
+                    type: "suggest_item",
+                    payload: {
+                        item: {
+                            id: result.id,
+                            title: result.title,
+                            artist: result.channel || "Unknown Artist",
+                            url: youtubeWatchUrl, // Use YouTube watch URL for YouTube adapter
+                            source: "youtube",
+                            duration: duration,
+                            artwork: result.thumbnail,
+                            video_id: result.id,
+                        }
+                    }
+                }));
+                // Switch to queue tab automatically
+                setActiveTab("queue");
+            } else {
+                console.warn("handleSuggestYouTube: WebSocket not available or not open. ws:", ws, "readyState:", ws?.readyState);
+                if (onSuggest) {
+                    // Fallback to callback
+                    const queueItem: QueueItem = {
+                        id: result.id,
+                        title: result.title,
+                        artist: result.channel || "Unknown Artist",
+                        url: youtubeWatchUrl,
+                        source: "youtube",
+                        duration: duration,
+                        artwork: result.thumbnail,
+                        isSuggested: true,
+                        votes: 0,
+                        userVote: null,
+                    };
+                    await onSuggest(queueItem);
+                }
             }
         } catch (error) {
             console.error("Suggest YouTube failed:", error);
@@ -744,23 +841,47 @@ function SearchTab({
 
     const handleSuggestHTML5 = async (result: any) => {
         try {
-            const downloadResult = await downloadMutation.mutateAsync(result.id);
-            
-            const queueItem: QueueItem = {
-                id: result.id,
-                title: downloadResult.title || result.title,
-                artist: result.channel || "Unknown Artist",
-                url: downloadResult.url,
-                source: "html5",
-                duration: downloadResult.duration || result.duration,
-                artwork: result.thumbnail,
-                isSuggested: true,
-                votes: 0,
-                userVote: null,
-            };
+            console.log("handleSuggestHTML5: Sending suggest_item immediately (download will happen in background)");
 
-            if (onSuggest) {
-                await onSuggest(queueItem);
+            // Send via WebSocket immediately (download happens in background on backend)
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log("handleSuggestHTML5: Sending suggest_item via WebSocket");
+                ws.send(JSON.stringify({
+                    type: "suggest_item",
+                    payload: {
+                        item: {
+                            id: result.id,
+                            title: result.title,
+                            artist: result.channel || "Unknown Artist",
+                            url: "", // Empty URL - will be set when download completes
+                            source: "html5",
+                            duration: result.duration,
+                            artwork: result.thumbnail,
+                            video_id: result.id, // For background download
+                        }
+                    }
+                }));
+                // Switch to queue tab automatically
+                setActiveTab("queue");
+            } else {
+                console.warn("handleSuggestHTML5: WebSocket not available or not open. ws:", ws, "readyState:", ws?.readyState);
+                if (onSuggest) {
+                    // Fallback to callback
+                    const queueItem: QueueItem = {
+                        id: result.id,
+                        title: result.title,
+                        artist: result.channel || "Unknown Artist",
+                        url: "",
+                        source: "html5",
+                        duration: result.duration,
+                        artwork: result.thumbnail,
+                        isSuggested: true,
+                        votes: 0,
+                        userVote: null,
+                        isPending: true,
+                    };
+                    await onSuggest(queueItem);
+                }
             }
         } catch (error) {
             console.error("Suggest HTML5 failed:", error);
@@ -822,24 +943,52 @@ function SearchTab({
     const handleSuggestHTML5Direct = async () => {
         if (!html5Url.trim()) return;
         
-        const queueItem: QueueItem = {
-            id: `html5-${Date.now()}`,
-            title: html5Title.trim() || "Unknown Title",
-            artist: html5Artist.trim() || "Unknown Artist",
-            url: html5Url.trim(),
-            source: "html5",
-            artwork: undefined,
-            isSuggested: true,
-            votes: 0,
-            userVote: null,
-        };
+        console.log("handleSuggestHTML5Direct: Sending HTML5 direct suggestion");
 
-        if (onSuggest) {
-            await onSuggest(queueItem);
+        // Send via WebSocket if available
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            console.log("handleSuggestHTML5Direct: Sending suggest_item via WebSocket");
+            ws.send(JSON.stringify({
+                type: "suggest_item",
+                payload: {
+                    item: {
+                        id: `html5-${Date.now()}`,
+                        title: html5Title.trim() || "Unknown Title",
+                        artist: html5Artist.trim() || "Unknown Artist",
+                        url: html5Url.trim(),
+                        source: "html5",
+                        duration: html5Duration || undefined,
+                        artwork: undefined,
+                    }
+                }
+            }));
+            // Switch to queue tab automatically
+            setActiveTab("queue");
             // Clear form
             setHtml5Url("");
             setHtml5Title("");
             setHtml5Artist("");
+        } else {
+            console.warn("handleSuggestHTML5Direct: WebSocket not available or not open. ws:", ws, "readyState:", ws?.readyState);
+            if (onSuggest) {
+                // Fallback to callback
+                const queueItem: QueueItem = {
+                    id: `html5-${Date.now()}`,
+                    title: html5Title.trim() || "Unknown Title",
+                    artist: html5Artist.trim() || "Unknown Artist",
+                    url: html5Url.trim(),
+                    source: "html5",
+                    artwork: undefined,
+                    isSuggested: true,
+                    votes: 0,
+                    userVote: null,
+                };
+                await onSuggest(queueItem);
+                // Clear form
+                setHtml5Url("");
+                setHtml5Title("");
+                setHtml5Artist("");
+            }
         }
     };
 
@@ -918,10 +1067,10 @@ function SearchTab({
                         )}
                         <Button
                             onClick={handleSuggestHTML5Direct}
-                            disabled={true}
+                            disabled={!html5Url.trim() || !isUrlValid}
                             variant="outline"
-                            className="w-full opacity-50 cursor-not-allowed"
-                            title="Voting disabled for now"
+                            className="w-full"
+                            title="Suggest for voting"
                         >
                             <Vote className="h-4 w-4 mr-2" />
                             Open for Vote
@@ -1027,8 +1176,8 @@ function SearchTab({
                                                                 disabled={downloadMutation.isPending}
                                                                 className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 rounded-b-lg disabled:opacity-50"
                                                             >
-                                                                <CloudUpload className="h-4 w-4" />
-                                                                HTML5
+                                                            <FileAudio className="h-4 w-4" />
+                                                            HTML5
                                                             </button>
                                                         </div>
                                                     </>
@@ -1036,21 +1185,20 @@ function SearchTab({
                                             </div>
                                         )}
                                         
-                                        {/* Open for Vote button with dropdown - Disabled for now */}
+                                        {/* Open for Vote button with dropdown */}
                                         <div className="relative">
                                             <Button
                                                 size="icon"
                                                 variant="outline"
-                                                className="h-8 w-8 opacity-50 cursor-not-allowed"
-                                                disabled={true}
-                                                onClick={() => {}} // Disabled - no action
-                                                title="Voting disabled for now"
+                                                className="h-8 w-8"
+                                                onClick={() => setOpenMenuId(openMenuId === `vote-${result.id}` ? null : `vote-${result.id}`)}
+                                                title="Suggest for voting"
                                             >
                                                 <Vote className="h-4 w-4" />
                                             </Button>
                                             
-                                            {/* Dropdown menu - kept for future implementation */}
-                                            {false && openMenuId === `vote-${result.id}` && (
+                                            {/* Dropdown menu */}
+                                            {openMenuId === `vote-${result.id}` && (
                                                 <>
                                                     <div 
                                                         className="fixed inset-0 z-10" 
@@ -1075,7 +1223,7 @@ function SearchTab({
                                                             disabled={downloadMutation.isPending}
                                                             className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex items-center gap-2 rounded-b-lg disabled:opacity-50"
                                                         >
-                                                            <CloudUpload className="h-4 w-4" />
+                                                            <FileAudio className="h-4 w-4" />
                                                             HTML5
                                                         </button>
                                                     </div>
