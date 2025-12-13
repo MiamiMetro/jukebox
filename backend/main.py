@@ -300,6 +300,52 @@ initialize_test_rooms()
 # Store client IPs per WebSocket (for tracking active downloads)
 client_ips: Dict[WebSocket, str] = {}
 
+def get_client_ip(ws: WebSocket) -> str:
+    """
+    Extract the real client IP address from WebSocket connection.
+    Checks forwarded headers for Docker/proxy/Cloudflare setups,
+    falling back to direct connection IP.
+    
+    Priority order:
+    1. CF-Connecting-IP (Cloudflare)
+    2. True-Client-IP (Cloudflare Enterprise)
+    3. X-Forwarded-For (standard proxy header)
+    4. X-Real-IP (nginx, some proxies)
+    5. Direct connection IP
+    
+    Note: For Docker containers, you need a reverse proxy that adds these headers,
+    or the IP will still show the Docker bridge IP (172.17.0.1).
+    """
+    # Check Cloudflare headers first (most reliable when using Cloudflare)
+    cf_ip = ws.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+    
+    true_client_ip = ws.headers.get("true-client-ip")
+    if true_client_ip:
+        return true_client_ip.strip()
+    
+    # Check X-Forwarded-For header (most common proxy header)
+    # Format: "client_ip, proxy1_ip, proxy2_ip, ..."
+    # Headers are case-insensitive in Starlette
+    forwarded_for = ws.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Get the first IP (the original client)
+        client_ip = forwarded_for.split(",")[0].strip()
+        if client_ip:
+            return client_ip
+    
+    # Check X-Real-IP header (some proxies use this)
+    real_ip = ws.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    
+    # Fall back to direct connection IP
+    if hasattr(ws, 'client') and ws.client:
+        return ws.client.host
+    
+    return "unknown"
+
 async def start_pending_download(room: Room, queue_item_id: str, client_ip: str, video_id: str):
     """Start download for a pending queue item in a room"""
     from yt_api import download_queue, active_downloads_per_ip, get_estimated_audio_size, supabase, supabase_bucket
@@ -834,8 +880,8 @@ async def ws_endpoint(ws: WebSocket, slug: str):
         await ws.close(code=1008, reason=str(e))
         return
     
-    # Get and store client IP
-    client_ip = ws.client.host if hasattr(ws, 'client') and ws.client else "unknown"
+    # Get and store client IP (with Docker/proxy support via forwarded headers)
+    client_ip = get_client_ip(ws)
     
     # Only proceed if WebSocket is actually connected
     if ws.client_state.name != "CONNECTED":
