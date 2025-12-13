@@ -6,6 +6,7 @@ import json, time
 import os
 import asyncio
 import uuid
+import re
 from typing import Dict, Set, Optional
 from dataclasses import dataclass, field
 from yt_api import router as youtube_router, download_queue, active_downloads_per_ip, ensure_workers_started
@@ -806,6 +807,11 @@ app.mount("/static", StaticFiles(directory=os.path.dirname(__file__)), name="sta
 
 def get_or_create_room(slug: str) -> Room:
     """Get existing room or create new one"""
+    # Validate slug: alphanumeric and hyphens only, max 16 characters
+    if not slug or len(slug) > 16:
+        raise ValueError(f"Room slug must be 1-16 characters long, got {len(slug) if slug else 0}")
+    if not re.match(r'^[a-zA-Z0-9-]+$', slug):
+        raise ValueError("Room slug can only contain alphanumeric characters and hyphens")
     if slug not in rooms:
         rooms[slug] = Room(slug=slug)
         print(f"Created new room: {slug}")
@@ -814,9 +820,19 @@ def get_or_create_room(slug: str) -> Room:
 @app.websocket("/ws/{slug}")
 async def ws_endpoint(ws: WebSocket, slug: str):
     await ws.accept()
+    room = None  # Initialize room variable for finally block
     
-    # Get or create room
-    room = get_or_create_room(slug)
+    # Get or create room (with validation)
+    try:
+        room = get_or_create_room(slug)
+    except ValueError as e:
+        await ws.send_json({
+            "type": "error",
+            "payload": {"message": str(e)},
+            "server_time": time.time()
+        })
+        await ws.close(code=1008, reason=str(e))
+        return
     
     # Get and store client IP
     client_ip = ws.client.host if hasattr(ws, 'client') and ws.client else "unknown"
@@ -1865,15 +1881,26 @@ async def ws_endpoint(ws: WebSocket, slug: str):
     except Exception as e:
         # Handle any other errors and ensure user is removed
         print(f"Error in WebSocket connection for room {slug}: {e}")
-        await room.remove_user(ws)
+        if room is not None:
+            try:
+                await room.remove_user(ws)
+            except Exception:
+                pass  # Ignore errors during cleanup
         if ws in client_ips:
             del client_ips[ws]
     finally:
         # Ensure user is always removed when connection ends
-        if ws in room.users:
-            await room.remove_user(ws)
+        if room is not None:
+            try:
+                if ws in room.users:
+                    await room.remove_user(ws)
+            except Exception:
+                pass  # Ignore errors during cleanup
         if ws in client_ips:
-            del client_ips[ws]
+            try:
+                del client_ips[ws]
+            except Exception:
+                pass  # Ignore errors during cleanup
 
 if __name__ == "__main__":
     import uvicorn

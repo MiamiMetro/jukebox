@@ -250,6 +250,16 @@ export function Chat({ currentRoom }: { currentRoom: string }) {
         const trimmedMessage = inputMessage.trim();
         if (!trimmedMessage || !currentRoom || !ws || ws.readyState !== WebSocket.OPEN) return;
 
+        if (trimmedMessage === "/dance") {
+            ws.send(
+                JSON.stringify({
+                    type: "dance",
+                })
+            );
+            setInputMessage("");
+            return;
+        }
+
         // Limit message length
         const limitedMessage = trimmedMessage.slice(0, MAX_MESSAGE_LENGTH);
 

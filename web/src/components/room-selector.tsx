@@ -43,23 +43,26 @@ export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelecto
 
     // Check if room exists when search query changes - using API (debounced)
     useEffect(() => {
-        const query = searchQuery.trim().toLowerCase();
-        if (query === "" || query === currentRoom.toLowerCase()) {
+        const roomName = searchQuery.trim();
+        if (roomName === "" || nameToSlug(roomName) === currentRoom.toLowerCase()) {
             setRoomExists(null);
             setCheckingRoom(false);
             return;
         }
+
+        // Convert name to slug for checking
+        const slug = nameToSlug(roomName);
 
         // Debounce room existence check (300ms)
         const timeoutId = setTimeout(async () => {
             setCheckingRoom(true);
             try {
                 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-                const response = await fetch(`${apiBase}/api/rooms?search=${encodeURIComponent(query)}&limit=1`);
+                const response = await fetch(`${apiBase}/api/rooms?search=${encodeURIComponent(slug)}&limit=1`);
                 if (response.ok) {
                     const data = await response.json();
                     // Check if any room matches exactly
-                    const exactMatch = data.rooms.some((room: Room) => room.slug.toLowerCase() === query);
+                    const exactMatch = data.rooms.some((room: Room) => room.slug.toLowerCase() === slug);
                     setRoomExists(exactMatch);
                 } else {
                     setRoomExists(false);
@@ -234,16 +237,32 @@ export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelecto
         }
     }, [isOpen]);
 
+    // Validate and sanitize room name input
+    // Only allows alphanumeric and spaces, max 16 characters
+    const sanitizeRoomName = (value: string): string => {
+        // Remove any characters that aren't alphanumeric or spaces
+        const sanitized = value.replace(/[^a-zA-Z0-9 ]/g, '');
+        // Limit to 16 characters
+        return sanitized.slice(0, 16);
+    };
+
+    // Convert room name to slug (spaces -> hyphens)
+    const nameToSlug = (name: string): string => {
+        return name.trim().replace(/\s+/g, '-').toLowerCase();
+    };
+
     // Handle search query change (debounced)
     const handleSearchChange = (value: string) => {
-        setSearchQuery(value);
+        // Sanitize input: only alphanumeric and spaces, max 16 chars
+        const sanitized = sanitizeRoomName(value);
+        setSearchQuery(sanitized);
         setPage(0); // Reset to first page
         setRooms([]); // Clear existing rooms
         setHasMore(true); // Reset hasMore flag
         loadingPagesRef.current.clear(); // Clear loading pages
         
         // Open dropdown when user starts typing
-        if (!isOpen && value.trim() !== "") {
+        if (!isOpen && sanitized.trim() !== "") {
             setIsOpen(true);
         }
         
@@ -253,9 +272,11 @@ export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelecto
         }
         
         // Debounce room list loading (300ms)
+        // Use slug for search (spaces converted to hyphens)
         if (isOpen) {
             loadRoomsTimeoutRef.current = setTimeout(() => {
-                loadRooms(0, value);
+                const slug = nameToSlug(sanitized);
+                loadRooms(0, slug);
             }, 300);
         }
     };
@@ -271,8 +292,10 @@ export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelecto
 
     // Handle create room
     const handleCreateRoom = () => {
-        const roomSlug = searchQuery.trim();
-        if (roomSlug && onRoomChange) {
+        const roomName = searchQuery.trim();
+        if (roomName && onRoomChange) {
+            // Convert name to slug (spaces -> hyphens)
+            const roomSlug = nameToSlug(roomName);
             onRoomChange(roomSlug);
             setIsOpen(false);
         }
@@ -293,7 +316,7 @@ export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelecto
     };
 
     const showCreateButton = searchQuery.trim() !== "" && 
-                             searchQuery.trim().toLowerCase() !== currentRoom.toLowerCase() &&
+                             nameToSlug(searchQuery.trim()) !== currentRoom.toLowerCase() &&
                              roomExists === false &&
                              !checkingRoom;
 
@@ -323,6 +346,7 @@ export function RoomSelector({ ws: _ws, currentRoom, onRoomChange }: RoomSelecto
                         onFocus={handleInputFocus}
                         onClick={handleInputClick}
                         onTouchStart={handleInputClick}
+                        maxLength={16}
                         className={cn(
                             "pr-9",
                             currentRoom && "pr-20"
